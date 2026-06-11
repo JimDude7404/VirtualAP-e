@@ -49,14 +49,17 @@ object VirtualAPInstaller {
                 tempTar.outputStream().use { input.copyTo(it) }
             }
             onProgress(Log.INFO, "Unpacking $tarAsset...")
+            // Android's system tar has no xz support; use shipped busybox for both
+            // decompression (xzcat) and extraction (tar), piped to avoid a temp .tar file.
             val extractResult = Shell.cmd(
-                "tar xJf ${tempTar.absolutePath} -C ${Constants.VAP_DIR}/rootfs/ 2>&1"
+                "${Constants.BUSYBOX} xzcat '${tempTar.absolutePath}'" +
+                " | ${Constants.BUSYBOX} tar xf - -C '${Constants.VAP_DIR}/rootfs/' 2>&1"
             ).exec()
             tempTar.delete()
             if (!extractResult.isSuccess) {
-                return@withContext Result.failure(
-                    Exception("rootfs extraction failed:\n${extractResult.err.joinToString("\n")}")
-                )
+                val errLines = (extractResult.out + extractResult.err)
+                    .joinToString("\n").ifBlank { "no output — check busybox xzcat/tar support" }
+                return@withContext Result.failure(Exception("rootfs extraction failed:\n$errLines"))
             }
 
             // Step 6: Verify
