@@ -55,6 +55,26 @@ class PreferencesManager private constructor(context: Context) {
             prefs.edit().putString(Constants.KEY_THEME_PALETTE, value).apply()
         }
 
+    var apSsid: String
+        get() = prefs.getString(Constants.KEY_AP_SSID, "") ?: ""
+        set(value) { prefs.edit().putString(Constants.KEY_AP_SSID, value).apply() }
+
+    var apPassword: String
+        get() = prefs.getString(Constants.KEY_AP_PASSWORD, "") ?: ""
+        set(value) { prefs.edit().putString(Constants.KEY_AP_PASSWORD, value).apply() }
+
+    var apBand: String
+        get() = prefs.getString(Constants.KEY_AP_BAND, "2") ?: "2"
+        set(value) { prefs.edit().putString(Constants.KEY_AP_BAND, value).apply() }
+
+    var apChannel: String
+        get() = prefs.getString(Constants.KEY_AP_CHANNEL, "") ?: ""
+        set(value) { prefs.edit().putString(Constants.KEY_AP_CHANNEL, value).apply() }
+
+    var apUpstream: String
+        get() = prefs.getString(Constants.KEY_AP_UPSTREAM, "auto") ?: "auto"
+        set(value) { prefs.edit().putString(Constants.KEY_AP_UPSTREAM, value).apply() }
+
     companion object {
         @Volatile
         private var INSTANCE: PreferencesManager? = null

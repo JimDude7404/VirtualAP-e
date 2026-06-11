@@ -24,7 +24,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.virtualap.app.util.RootStatus
-import kotlinx.coroutines.delay
 
 @Composable
 fun RootCheckScreen(
@@ -50,14 +49,6 @@ fun RootCheckScreen(
         tween(durationMillis = 400, easing = FastOutSlowInEasing),
         label = "cardAlpha"
     )
-
-    // Auto-navigate when root is granted
-    LaunchedEffect(rootStatus) {
-        if (rootStatus == RootStatus.Granted) {
-            delay(500)
-            onNavigateNext()
-        }
-    }
 
     val btnShape = RoundedCornerShape(20.dp)
 

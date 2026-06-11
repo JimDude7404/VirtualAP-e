@@ -28,7 +28,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         private set
 
     init {
-        checkRoot()
+        if (prefs.rootAvailable) {
+            checkInstalled()
+        } else {
+            checkRoot()
+        }
     }
 
     fun checkRoot() {

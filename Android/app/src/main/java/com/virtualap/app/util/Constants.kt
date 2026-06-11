@@ -16,4 +16,9 @@ object Constants {
     const val KEY_AMOLED_MODE = "amoled_mode"
     const val KEY_USE_DYNAMIC_COLOR = "use_dynamic_color"
     const val KEY_THEME_PALETTE = "theme_palette"
+    const val KEY_AP_SSID = "ap_ssid"
+    const val KEY_AP_PASSWORD = "ap_password"
+    const val KEY_AP_BAND = "ap_band"
+    const val KEY_AP_CHANNEL = "ap_channel"
+    const val KEY_AP_UPSTREAM = "ap_upstream"
 }

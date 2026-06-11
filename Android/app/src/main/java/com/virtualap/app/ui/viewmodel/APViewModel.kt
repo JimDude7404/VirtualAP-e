@@ -8,10 +8,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.compose.runtime.snapshotFlow
 import com.virtualap.app.util.APManager
 import com.virtualap.app.util.APStatus
 import com.virtualap.app.util.DHCPLease
 import com.virtualap.app.util.NetworkIface
+import com.virtualap.app.util.PreferencesManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -26,9 +28,19 @@ data class APConfig(
 )
 
 class APViewModel(application: Application) : AndroidViewModel(application) {
+    private val prefs = PreferencesManager.getInstance(application)
+
     var status by mutableStateOf(APStatus())
         private set
-    var config by mutableStateOf(APConfig())
+    var config by mutableStateOf(
+        APConfig(
+            ssid = prefs.apSsid,
+            password = prefs.apPassword,
+            band = prefs.apBand,
+            channel = prefs.apChannel,
+            upstream = prefs.apUpstream
+        )
+    )
     var leases by mutableStateOf<List<DHCPLease>>(emptyList())
         private set
     var interfaces by mutableStateOf<List<NetworkIface>>(emptyList())
@@ -47,6 +59,15 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
     private var pollJob: Job? = null
 
     init {
+        viewModelScope.launch {
+            snapshotFlow { config }.collect { cfg ->
+                prefs.apSsid = cfg.ssid
+                prefs.apPassword = cfg.password
+                prefs.apBand = cfg.band
+                prefs.apChannel = cfg.channel
+                prefs.apUpstream = cfg.upstream
+            }
+        }
         startPolling()
         loadBootFlag()
         loadInterfaces()
