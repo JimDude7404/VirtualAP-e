@@ -52,6 +52,18 @@
     return `'` + String(s).replace(/'/g, `'\\''`) + `'`;
   }
 
+  // Strip shell quoting from a sourced-conf value ('...' or "...")
+  function unquoteShell(v) {
+    v = String(v).trim();
+    if (v.length >= 2 && v.startsWith(`'`) && v.endsWith(`'`)) {
+      return v.slice(1, -1).replace(/'\\''/g, `'`);
+    }
+    if (v.length >= 2 && v.startsWith(`"`) && v.endsWith(`"`)) {
+      return v.slice(1, -1);
+    }
+    return v;
+  }
+
   function parseKV(text) {
     const out = {};
     (text || '').split('\n').forEach((line) => {
@@ -172,9 +184,17 @@
     } catch (e) { /* keep Auto only */ }
   }
 
+  let savedPhyIface = 'wlan0'; // preserved across WebUI saves (set via CLI -w only)
+
   async function loadSavedConfig() {
     try {
-      const conf = parseKV((await exec(`cat ${VAP}/ap.conf 2>/dev/null`)).replace(/"/g, ''));
+      const raw = await exec(`cat ${VAP}/ap.conf 2>/dev/null`);
+      const conf = {};
+      (raw || '').split('\n').forEach((line) => {
+        const i = line.indexOf('=');
+        if (i > 0) conf[line.slice(0, i).trim()] = unquoteShell(line.slice(i + 1));
+      });
+      if (conf.PHY_IFACE) savedPhyIface = conf.PHY_IFACE;
       if (conf.SSID) els.cfgSsid.value = conf.SSID;
       if (conf.PASSWORD) els.cfgPass.value = conf.PASSWORD;
       if (conf.BAND) { els.cfgBand.value = conf.BAND; fillChannels(); }
@@ -196,6 +216,26 @@
       const v = (await exec(`cat ${VAP}/boot-ap 2>/dev/null || echo 0`)).trim();
       els.cfgBoot.checked = v === '1';
     } catch (e) { els.cfgBoot.checked = false; }
+  }
+
+  // Persist form fields to ap.conf as the user edits them - the engine only
+  // saves on a start attempt, which would lose edits made while stopped.
+  let saveTimer = null;
+  function persistConfig() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      const lines = [
+        `PHY_IFACE=${shQuote(savedPhyIface)}`,
+        `UPSTREAM=${shQuote(els.cfgUpstream.value || 'auto')}`,
+        `SSID=${shQuote(els.cfgSsid.value.trim())}`,
+        `PASSWORD=${shQuote(els.cfgPass.value)}`,
+        `BAND=${shQuote(els.cfgBand.value)}`,
+        `CHANNEL=${shQuote(els.cfgChannel.value)}`,
+      ];
+      // Each line is already shell-source-quoted; shQuote again for transport.
+      const script = `printf '%s\\n' ${lines.map(shQuote).join(' ')} > ${VAP}/ap.conf`;
+      execSafe(script).catch(() => {});
+    }, 500);
   }
 
   async function refreshLogs() {
@@ -249,9 +289,17 @@
   // --- Wiring --------------------------------------------------------------
 
   els.btnToggle.addEventListener('click', () => (running ? stopAp() : startAp()));
-  els.cfgBand.addEventListener('change', fillChannels);
+  els.cfgBand.addEventListener('change', () => { fillChannels(); persistConfig(); });
+  els.cfgSsid.addEventListener('input', persistConfig);
+  els.cfgPass.addEventListener('input', persistConfig);
+  els.cfgChannel.addEventListener('change', persistConfig);
+  els.cfgUpstream.addEventListener('change', persistConfig);
   $('refresh-ifaces').addEventListener('click', refreshInterfaces);
   $('refresh-logs').addEventListener('click', refreshLogs);
+  $('clear-logs').addEventListener('click', async () => {
+    try { await exec(`: > ${VAP}/logs/ap.log`); } catch (e) { /* ignore */ }
+    refreshLogs();
+  });
   $('toggle-pass').addEventListener('click', () => {
     els.cfgPass.type = els.cfgPass.type === 'password' ? 'text' : 'password';
   });

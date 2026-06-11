@@ -27,8 +27,10 @@ else
     exit 1
 fi
 
-log() { [ "$SILENT" -eq 0 ] && echo "[INFO] $1"; }
-warn() { [ "$SILENT" -eq 0 ] && echo "[WARN] $1"; }
+# Must return 0 even when silent: log is often the last statement of a
+# function, and `[ ... ] && echo` returns 1 under -s, failing the caller.
+log() { [ "$SILENT" -eq 0 ] && echo "[INFO] $1"; return 0; }
+warn() { [ "$SILENT" -eq 0 ] && echo "[WARN] $1"; return 0; }
 error() { echo "[ERROR] $1"; }
 
 usage() {

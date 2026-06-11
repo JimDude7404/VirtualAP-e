@@ -108,14 +108,18 @@ load_conf() {
     [ -f "$CONF_FILE" ] && . "$CONF_FILE"
 }
 
+# Single-quote values for sourcing: a password containing " or $ must not
+# break (or worse, execute inside) the conf file.
+sq() { printf "%s" "$1" | sed "s/'/'\\\\''/g"; }
+
 save_conf() {
     cat > "$CONF_FILE" <<EOF
-PHY_IFACE="$PHY_IFACE"
-UPSTREAM="$UPSTREAM"
-SSID="$SSID"
-PASSWORD="$PASSWORD"
-BAND="$BAND"
-CHANNEL="$CHANNEL"
+PHY_IFACE='$(sq "$PHY_IFACE")'
+UPSTREAM='$(sq "$UPSTREAM")'
+SSID='$(sq "$SSID")'
+PASSWORD='$(sq "$PASSWORD")'
+BAND='$(sq "$BAND")'
+CHANNEL='$(sq "$CHANNEL")'
 EOF
 }
 
@@ -430,6 +434,10 @@ cmd_start() {
 
     check_prerequisites || exit 1
 
+    # Persist settings now, before pick_channel mutates BAND/CHANNEL and
+    # before anything can fail - a failed attempt must not lose the config.
+    save_conf
+
     # Restart semantics: tear down any previous instance first
     [ -f "$STATE_FILE" ] && { log "Existing AP state found - restarting..."; teardown; }
 
@@ -448,7 +456,6 @@ cmd_start() {
         exit 1
     fi
 
-    save_conf
     log "VirtualAP is ACTIVE!"
     log "  SSID    : $SSID (${BAND}GHz, channel $CHANNEL)"
     log "  Gateway : $IP_GW (static - never changes)"

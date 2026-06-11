@@ -63,6 +63,8 @@ html, body {
 .card h2 { font-size: 1rem; margin-bottom: 14px; color: var(--text); }
 .card h3 { font-size: 0.85rem; margin: 14px 0 8px; color: var(--muted); }
 .card-head { display: flex; align-items: center; justify-content: space-between; }
+.btn-row { display: flex; gap: 8px; }
+.btn-row .btn-icon { min-height: 36px; }
 .card-head h2 { margin-bottom: 0; }
 .card-head + .logs { margin-top: 12px; }
 
