@@ -4,12 +4,10 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.interaction.MutableInteractionSource
 
 @Composable
 fun SwitchItem(
@@ -23,11 +21,7 @@ fun SwitchItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(
-                enabled = enabled,
-                interactionSource = remember { MutableInteractionSource() },
-                indication = ripple()
-            ) { onCheckedChange(!checked) }
+            .clickable(enabled = enabled) { onCheckedChange(!checked) }
             .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
