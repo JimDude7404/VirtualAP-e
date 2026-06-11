@@ -1,4 +1,0 @@
-id=virtualap
-name=VirtualAP
-author=ravindu644
-description=Turn your phone's WiFi chip into a real router: virtual AP with a static gateway IP, selectable upstream (Mobile Data / WiFi / Ethernet / WireGuard), DHCP+DNS, and a modern WebUI.

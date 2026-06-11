@@ -1,6 +1,3 @@
 out/
-*.zip
-*.tar
-*.tar.xz
 backend/bin/busybox
 .DS_Store

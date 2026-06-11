@@ -233,7 +233,7 @@ fun RootCheckScreen(
                                 textAlign = TextAlign.Center
                             )
                             Text(
-                                text = "VirtualAP requires root to create virtual network interfaces and manage the AP. Please grant root access via Magisk or KernelSU.",
+                                text = "VirtualAP requires root access to create virtual network interfaces and manage the AP.",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = TextAlign.Center
