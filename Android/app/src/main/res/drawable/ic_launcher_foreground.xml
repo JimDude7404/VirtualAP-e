@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer wifi arc -->
+    <path
+        android:pathData="M54,30
+            C70,30 84,40 90,54
+            C84,54 79,49 54,49
+            C29,49 24,54 18,54
+            C24,40 38,30 54,30Z"
+        android:fillColor="#4CC2FF"
+        android:fillAlpha="0.9"/>
+
+    <!-- Middle wifi arc -->
+    <path
+        android:pathData="M54,44
+            C63,44 71,48 76,54
+            C71,54 65,51 54,51
+            C43,51 37,54 32,54
+            C37,48 45,44 54,44Z"
+        android:fillColor="#4CC2FF"/>
+
+    <!-- Inner wifi arc -->
+    <path
+        android:pathData="M54,58
+            C58,58 62,60 64,63
+            C62,63 58,62 54,62
+            C50,62 46,63 44,63
+            C46,60 50,58 54,58Z"
+        android:fillColor="#4CC2FF"/>
+
+    <!-- Dot -->
+    <circle
+        android:cx="54"
+        android:cy="72"
+        android:r="5"
+        android:fillColor="#4CC2FF"/>
+</vector>

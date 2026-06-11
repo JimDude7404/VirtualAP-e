@@ -29,13 +29,13 @@ echo "Bundling rootfs: $ROOTFS_TAR"
 
 # Extract static busybox from the rootfs (host-side unshare/nsenter helper).
 # Alpine's busybox-static package installs /bin/busybox.static.
-mkdir -p tools/bin
-if [ ! -f tools/bin/busybox ]; then
+mkdir -p backend/bin
+if [ ! -f backend/bin/busybox ]; then
     echo "Extracting static busybox from rootfs..."
-    tar -xJf "$ROOTFS_TAR" -O bin/busybox.static > tools/bin/busybox 2>/dev/null \
-        || tar -xJf "$ROOTFS_TAR" -O ./bin/busybox.static > tools/bin/busybox
-    [ -s tools/bin/busybox ] || { echo "Failed to extract busybox.static from rootfs"; exit 1; }
-    chmod 755 tools/bin/busybox
+    tar -xJf "$ROOTFS_TAR" -O bin/busybox.static > backend/bin/busybox 2>/dev/null \
+        || tar -xJf "$ROOTFS_TAR" -O ./bin/busybox.static > backend/bin/busybox
+    [ -s backend/bin/busybox ] || { echo "Failed to extract busybox.static from rootfs"; exit 1; }
+    chmod 755 backend/bin/busybox
 fi
 
 TMP_DIR=$(mktemp -d)
@@ -47,6 +47,7 @@ rsync -a \
     --exclude='build_zip.sh' \
     --exclude='README.md' \
     --exclude='Screenshots' \
+    --exclude='Android' \
     "$PWD/" "$TMP_DIR/"
 
 cp "$ROOTFS_TAR" "$TMP_DIR/"

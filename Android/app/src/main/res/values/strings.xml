@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VirtualAP</string>
+    <string name="root_check_title">Root Access Required</string>
+    <string name="root_check_body">VirtualAP needs root access to create virtual network interfaces and manage the AP.</string>
+    <string name="grant_root">Grant Root Access</string>
+    <string name="checking">Checking…</string>
+    <string name="root_granted">Root access granted</string>
+    <string name="root_denied">Root access denied</string>
+    <string name="setup_title">Setting Up VirtualAP</string>
+    <string name="done">Done</string>
+    <string name="retry">Retry</string>
+    <string name="copy_logs">Copy Logs</string>
+    <string name="logs_copied">Logs copied to clipboard</string>
+    <string name="back">Back</string>
+    <string name="start_ap">Start Access Point</string>
+    <string name="stop_ap">Stop Access Point</string>
+</resources>

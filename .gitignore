@@ -2,5 +2,5 @@ out/
 *.zip
 *.tar
 *.tar.xz
-tools/bin/busybox
+backend/bin/busybox
 .DS_Store

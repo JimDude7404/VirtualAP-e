@@ -26,7 +26,7 @@ detect_root() {
 setup_busybox() {
     mkdir -p "$VAP_DIR/bin"
 
-    if unzip -oj "$ZIPFILE" 'tools/bin/busybox' -d "$VAP_DIR/bin" >&2 \
+    if unzip -oj "$ZIPFILE" 'backend/bin/busybox' -d "$VAP_DIR/bin" >&2 \
         && chmod 755 "$VAP_DIR/bin/busybox"; then
         echo "- Busybox extracted successfully" >&2
         export BUSYBOX="$VAP_DIR/bin/busybox"
@@ -44,8 +44,8 @@ setup_busybox() {
 setup_tools() {
     mkdir -p "$VAP_DIR"
     setup_busybox
-    unzip -oj "$ZIPFILE" 'tools/vap.sh' -d "$VAP_DIR" >&2
-    unzip -oj "$ZIPFILE" 'tools/start-ap' -d "$VAP_DIR" >&2
+    unzip -oj "$ZIPFILE" 'backend/vap.sh' -d "$VAP_DIR" >&2
+    unzip -oj "$ZIPFILE" 'backend/start-ap' -d "$VAP_DIR" >&2
     echo "- Core tools extracted"
 }
 
