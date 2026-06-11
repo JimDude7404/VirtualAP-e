@@ -28,18 +28,25 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     var installStatus by mutableStateOf(InstallStatus.Checking)
         private set
 
-    // Theme state — mutableStateOf so changes recompose VirtualAPTheme immediately
-    var followSystemTheme by mutableStateOf(prefs.followSystemTheme); private set
-    var darkThemeEnabled  by mutableStateOf(prefs.darkTheme);         private set
-    var dynamicColor      by mutableStateOf(prefs.useDynamicColor);   private set
-    var amoledMode        by mutableStateOf(prefs.amoledMode);        private set
-    var themePalette      by mutableStateOf(ThemePalette.fromName(prefs.themePalette)); private set
+    // Private mutable backing state — read via computed val below to avoid
+    // JVM setter name clash with the explicit set* functions.
+    private var _followSystemTheme by mutableStateOf(prefs.followSystemTheme)
+    private var _darkThemeEnabled  by mutableStateOf(prefs.darkTheme)
+    private var _dynamicColor      by mutableStateOf(prefs.useDynamicColor)
+    private var _amoledMode        by mutableStateOf(prefs.amoledMode)
+    private var _themePalette      by mutableStateOf(ThemePalette.fromName(prefs.themePalette))
 
-    fun setFollowSystemTheme(v: Boolean) { followSystemTheme = v; prefs.followSystemTheme = v }
-    fun setDarkTheme(v: Boolean)         { darkThemeEnabled  = v; prefs.darkTheme = v }
-    fun setDynamicColor(v: Boolean)      { dynamicColor      = v; prefs.useDynamicColor = v }
-    fun setAmoledMode(v: Boolean)        { amoledMode        = v; prefs.amoledMode = v }
-    fun setThemePalette(p: ThemePalette) { themePalette      = p; prefs.themePalette = p.name }
+    val followSystemTheme: Boolean get() = _followSystemTheme
+    val darkThemeEnabled:  Boolean get() = _darkThemeEnabled
+    val dynamicColor:      Boolean get() = _dynamicColor
+    val amoledMode:        Boolean get() = _amoledMode
+    val themePalette:      ThemePalette get() = _themePalette
+
+    fun setFollowSystemTheme(v: Boolean) { _followSystemTheme = v; prefs.followSystemTheme = v }
+    fun setDarkTheme(v: Boolean)         { _darkThemeEnabled  = v; prefs.darkTheme = v }
+    fun setDynamicColor(v: Boolean)      { _dynamicColor      = v; prefs.useDynamicColor = v }
+    fun setAmoledMode(v: Boolean)        { _amoledMode        = v; prefs.amoledMode = v }
+    fun setThemePalette(p: ThemePalette) { _themePalette      = p; prefs.themePalette = p.name }
 
     init {
         if (prefs.rootAvailable) {
