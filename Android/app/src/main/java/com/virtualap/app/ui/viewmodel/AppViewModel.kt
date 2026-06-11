@@ -53,20 +53,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun setThemePalette(p: ThemePalette) { _themePalette      = p; prefs.themePalette = p.name }
 
     init {
-        when {
-            !prefs.hasSeenRootCheck -> {
-                // First launch — stay on RootCheckScreen; user taps to prompt SU manager
-            }
-            prefs.rootAvailable -> {
-                // Returning user with known-good root: skip the check screen entirely,
-                // go straight to main/setup, and verify root silently in background.
-                checkInstalled()
-                checkRootSilently()
-            }
-            else -> {
-                // Root was previously denied — show the check screen again (Denied state)
-                rootStatus = RootStatus.Denied
-            }
+        if (prefs.hasSeenRootCheck && prefs.rootAvailable) {
+            // Returning user: skip the root screen, jump straight to install check,
+            // and verify root silently so we catch revocations without a prompt.
+            checkInstalled()
+            checkRootSilently()
+        } else {
+            // First launch or root previously denied: show RootCheckScreen and
+            // immediately initiate the check so the SU manager dialog appears.
+            checkRoot()
         }
     }
 
