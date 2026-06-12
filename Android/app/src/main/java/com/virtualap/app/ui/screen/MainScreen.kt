@@ -19,12 +19,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshContainer
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.*
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -60,7 +64,8 @@ private fun isValidDnsServers(dns: String): Boolean {
 @Composable
 fun MainScreen(
     vm: APViewModel = viewModel(),
-    onNavigateToSettings: () -> Unit = {}
+    onNavigateToSettings: () -> Unit = {},
+    onRefresh: () -> Unit = {}
 ) {
     val status = vm.status
     var passwordVisible by remember { mutableStateOf(false) }
@@ -98,38 +103,77 @@ fun MainScreen(
                             contentDescription = stringResource(R.string.settings_title)
                         )
                     }
-                    // Status pill chip
-                    SuggestionChip(
-                        onClick = { vm.refreshStatus() },
-                        label = {
-                            Text(
-                                text = if (status.running) stringResource(R.string.status_running) else stringResource(R.string.status_stopped),
-                                style = MaterialTheme.typography.labelSmall
-                            )
-                        },
-                        icon = {
-                            Icon(
-                                imageVector = if (status.running) Icons.Default.Wifi else Icons.Default.WifiOff,
-                                contentDescription = null,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        },
-                        colors = SuggestionChipDefaults.suggestionChipColors(
-                            containerColor = if (status.running)
-                                MaterialTheme.colorScheme.primaryContainer
-                            else
-                                MaterialTheme.colorScheme.surfaceVariant
-                        ),
-                        modifier = Modifier.padding(end = 12.dp)
-                    )
+                    // Status pill chip — a small spinner stands in until the first
+                    // fetch lands, so we never flash a wrong "Stopped" state.
+                    if (!vm.isReady) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.padding(end = 16.dp).size(18.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        SuggestionChip(
+                            onClick = { vm.refreshStatus() },
+                            label = {
+                                Text(
+                                    text = if (status.running) stringResource(R.string.status_running) else stringResource(R.string.status_stopped),
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            },
+                            icon = {
+                                Icon(
+                                    imageVector = if (status.running) Icons.Default.Wifi else Icons.Default.WifiOff,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            },
+                            colors = SuggestionChipDefaults.suggestionChipColors(
+                                containerColor = if (status.running)
+                                    MaterialTheme.colorScheme.primaryContainer
+                                else
+                                    MaterialTheme.colorScheme.surfaceVariant
+                            ),
+                            modifier = Modifier.padding(end = 12.dp)
+                        )
+                    }
                 }
             )
         }
     ) { innerPadding ->
-        LazyColumn(
+        // Gate the whole screen on the first load so nothing flashes stale state
+        // or pops in late (status, interfaces and containers all arrive together).
+        if (!vm.isReady) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                CircularProgressIndicator()
+            }
+            return@Scaffold
+        }
+
+        // Global pull-to-refresh: re-fetch status, interfaces, containers and
+        // root in one gesture (replaces the old per-control refresh button).
+        val pullState = rememberPullToRefreshState()
+        if (pullState.isRefreshing) {
+            LaunchedEffect(true) {
+                try {
+                    vm.refreshAllNow()
+                    onRefresh()
+                } finally {
+                    pullState.endRefresh()
+                }
+            }
+        }
+
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
+                .nestedScroll(pullState.nestedScrollConnection)
+        ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
             contentPadding = PaddingValues(vertical = 16.dp)
@@ -271,29 +315,51 @@ fun MainScreen(
                                 }
                             }
                         }
-                        Spacer(Modifier.height(8.dp))
+                    }
+                }
+            }
 
-                        // --- Upstream: a Droidspaces container (managed) OR a host interface ---
+            // --- 3. UPSTREAM CARD (where the internet comes from) ---
+            item {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            stringResource(R.string.upstream_card_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(Modifier.height(12.dp))
+
                         val hasContainers = vm.containers.isNotEmpty()
 
-                        // Container-integration toggle — only when Droidspaces is
-                        // installed AND at least one container is running.
+                        // Interface | Container selector — shown only when Droidspaces
+                        // is present with at least one running container.
                         if (hasContainers) {
-                            SwitchItem(
-                                label = stringResource(R.string.container_mode_label),
-                                subtitle = stringResource(R.string.container_mode_desc),
-                                icon = Icons.Default.Dns,
-                                checked = vm.config.containerMode,
-                                onCheckedChange = { on ->
-                                    vm.config = vm.config.copy(
-                                        containerMode = on,
-                                        containerName = if (on && vm.config.containerName.isBlank())
-                                            vm.containers.first() else vm.config.containerName
-                                    )
-                                },
-                                enabled = !status.running
-                            )
-                            Spacer(Modifier.height(8.dp))
+                            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                                SegmentedButton(
+                                    selected = !vm.config.containerMode,
+                                    onClick = { if (!status.running) vm.config = vm.config.copy(containerMode = false) },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2),
+                                    enabled = !status.running,
+                                    icon = {}
+                                ) { Text(stringResource(R.string.interface_label)) }
+                                SegmentedButton(
+                                    selected = vm.config.containerMode,
+                                    onClick = {
+                                        if (!status.running) vm.config = vm.config.copy(
+                                            containerMode = true,
+                                            containerName = vm.config.containerName.ifBlank { vm.containers.first() }
+                                        )
+                                    },
+                                    shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
+                                    enabled = !status.running,
+                                    icon = {}
+                                ) { Text(stringResource(R.string.container_label)) }
+                            }
+                            Spacer(Modifier.height(12.dp))
                         }
 
                         if (vm.config.containerMode && hasContainers) {
@@ -329,8 +395,19 @@ fun MainScreen(
                                     }
                                 }
                             }
+                            Spacer(Modifier.height(4.dp))
+                            // Fixed 2-line caption so the card height stays identical
+                            // across the Interface/Container tabs.
+                            Text(
+                                stringResource(R.string.container_upstream_desc),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                minLines = 2,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         } else {
-                            // Classic upstream interface dropdown + refresh
+                            // Host interface dropdown (refresh via pull-to-refresh)
                             var upstreamExpanded by remember { mutableStateOf(false) }
                             val upstreamAutoLabel = stringResource(R.string.upstream_auto)
                             val upstreamOptions = listOf(upstreamAutoLabel to "auto") +
@@ -341,52 +418,51 @@ fun MainScreen(
                             val selectedUpstreamLabel = upstreamOptions.find { it.second == vm.config.upstream }?.first
                                 ?: upstreamAutoLabel
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
+                            ExposedDropdownMenuBox(
+                                expanded = upstreamExpanded,
+                                onExpandedChange = { if (!status.running) upstreamExpanded = it }
                             ) {
-                                ExposedDropdownMenuBox(
+                                OutlinedTextField(
+                                    value = selectedUpstreamLabel,
+                                    onValueChange = {},
+                                    readOnly = true,
+                                    label = { Text(stringResource(R.string.upstream_interface_label)) },
+                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = upstreamExpanded) },
+                                    modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                    enabled = !status.running
+                                )
+                                ExposedDropdownMenu(
                                     expanded = upstreamExpanded,
-                                    onExpandedChange = { if (!status.running) upstreamExpanded = it },
-                                    modifier = Modifier.weight(1f)
+                                    onDismissRequest = { upstreamExpanded = false }
                                 ) {
-                                    OutlinedTextField(
-                                        value = selectedUpstreamLabel,
-                                        onValueChange = {},
-                                        readOnly = true,
-                                        label = { Text(stringResource(R.string.upstream_interface_label)) },
-                                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = upstreamExpanded) },
-                                        modifier = Modifier.fillMaxWidth().menuAnchor(),
-                                        enabled = !status.running
-                                    )
-                                    ExposedDropdownMenu(
-                                        expanded = upstreamExpanded,
-                                        onDismissRequest = { upstreamExpanded = false }
-                                    ) {
-                                        upstreamOptions.forEach { (label, value) ->
-                                            DropdownMenuItem(
-                                                text = { Text(label) },
-                                                onClick = {
-                                                    vm.config = vm.config.copy(upstream = value)
-                                                    upstreamExpanded = false
-                                                }
-                                            )
-                                        }
+                                    upstreamOptions.forEach { (label, value) ->
+                                        DropdownMenuItem(
+                                            text = { Text(label) },
+                                            onClick = {
+                                                vm.config = vm.config.copy(upstream = value)
+                                                upstreamExpanded = false
+                                            }
+                                        )
                                     }
                                 }
-                                IconButton(
-                                    onClick = { vm.loadInterfaces() },
-                                    enabled = !status.running
-                                ) {
-                                    Icon(Icons.Default.Refresh, contentDescription = stringResource(R.string.refresh_interfaces_desc))
-                                }
                             }
+                            Spacer(Modifier.height(4.dp))
+                            // Fixed 2-line caption so the card height stays identical
+                            // across the Interface/Container tabs.
+                            Text(
+                                stringResource(R.string.interface_upstream_desc),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                minLines = 2,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                 }
             }
 
-            // --- 3. ADVANCED CARD ---
+            // --- 4. ADVANCED CARD ---
             item {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -485,7 +561,7 @@ fun MainScreen(
                 }
             }
 
-            // --- 4. ACTION BUTTONS (outside the cards) ---
+            // --- 5. ACTION BUTTONS (outside the cards) ---
             item {
                 Column {
                     // Start / Stop button
@@ -570,6 +646,12 @@ fun MainScreen(
             }
 
             item { Spacer(Modifier.height(8.dp)) }
+        }
+
+            PullToRefreshContainer(
+                state = pullState,
+                modifier = Modifier.align(Alignment.TopCenter)
+            )
         }
     }
 

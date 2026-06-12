@@ -45,9 +45,10 @@
     <string name="channel_label">Channel</string>
     <string name="upstream_interface_label">Upstream Interface</string>
     <string name="upstream_auto">Auto (recommended)</string>
-    <string name="container_mode_label">Route through container</string>
-    <string name="container_mode_desc">Hand the hotspot\'s LAN to a Droidspaces container (it manages DHCP, DNS and NAT)</string>
+    <string name="upstream_card_title">Upstream</string>
     <string name="container_label">Container</string>
+    <string name="container_upstream_desc">This Droidspaces container manages DHCP, DNS and NAT for the hotspot.</string>
+    <string name="interface_upstream_desc">VirtualAP handles DHCP, DNS and NAT over this interface.</string>
     <string name="managed_label">Managed</string>
     <string name="refresh_interfaces_desc">Refresh interfaces</string>
     <string name="starting">Starting…</string>

@@ -104,6 +104,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** On-demand root re-verification (e.g. pull-to-refresh on the main screen).
+     *  Silent on success; surfaces the revoked overlay if access is gone. */
+    fun recheckRoot() = checkRootSilently()
+
     fun checkInstalled() {
         viewModelScope.launch {
             installStatus = InstallStatus.Checking

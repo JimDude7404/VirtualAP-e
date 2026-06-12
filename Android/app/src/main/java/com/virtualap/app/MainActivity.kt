@@ -95,7 +95,8 @@ class MainActivity : ComponentActivity() {
                         composable(Screens.MAIN) {
                             MainScreen(
                                 vm = apVm,
-                                onNavigateToSettings = { navController.navigate(Screens.SETTINGS) }
+                                onNavigateToSettings = { navController.navigate(Screens.SETTINGS) },
+                                onRefresh = { appVm.recheckRoot() }
                             )
                         }
                         composable(Screens.SETTINGS) {

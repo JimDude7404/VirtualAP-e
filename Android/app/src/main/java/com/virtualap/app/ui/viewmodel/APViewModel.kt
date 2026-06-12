@@ -14,6 +14,8 @@ import com.virtualap.app.util.APStatus
 import com.virtualap.app.util.NetworkIface
 import com.virtualap.app.util.PreferencesManager
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -64,6 +66,10 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
     val actionLogs = mutableStateListOf<Pair<Int, String>>()
     var showActionLogs by mutableStateOf(false)
         private set
+    /** False until the first status/interfaces/containers fetch completes, so
+     *  the UI can show a spinner instead of flashing stale "stopped" state. */
+    var isReady by mutableStateOf(false)
+        private set
 
     private var pollJob: Job? = null
 
@@ -82,34 +88,64 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.apContainer = cfg.containerName
             }
         }
-        startPolling()
-        loadInterfaces()
-        loadContainers()
+        // One parallel initial load — gate the UI on it so everything appears at
+        // once (no status flicker, no late-popping container toggle).
+        viewModelScope.launch {
+            val s = async { APManager.getStatus() }
+            val ifs = async { APManager.getInterfaces() }
+            val cs = async { APManager.getContainers() }
+            status = s.await()
+            applyInterfaceList(ifs.await())
+            applyContainerList(cs.await())
+            logText = APManager.readLog()
+            isReady = true
+            startPolling()
+        }
+    }
+
+    private fun applyContainerList(list: List<String>) {
+        containers = list
+        // If the saved container vanished (stopped / Droidspaces gone), drop
+        // managed mode so we never send a stale -K to the backend.
+        val cfg = config
+        if (cfg.containerMode && cfg.containerName !in list) {
+            config = cfg.copy(containerMode = false, containerName = "")
+        }
+    }
+
+    private fun applyInterfaceList(ifaces: List<NetworkIface>) {
+        interfaces = ifaces
+        // If the saved upstream is gone (e.g. WireGuard tunnel stopped), reset to
+        // auto so a stale iface name isn't sent to the backend.
+        if (config.upstream != "auto" && ifaces.none { it.name == config.upstream }) {
+            config = config.copy(upstream = "auto")
+        }
     }
 
     fun loadContainers() {
-        viewModelScope.launch {
-            val list = APManager.getContainers()
-            containers = list
-            // If the saved container vanished (stopped / Droidspaces gone), drop
-            // managed mode so we never send a stale -K to the backend.
-            val cfg = config
-            if (cfg.containerMode && (list.isEmpty() || cfg.containerName !in list)) {
-                config = cfg.copy(
-                    containerMode = list.isNotEmpty() && cfg.containerName in list,
-                    containerName = if (cfg.containerName in list) cfg.containerName else ""
-                )
-            }
-        }
+        viewModelScope.launch { applyContainerList(APManager.getContainers()) }
+    }
+
+    /** Pull-to-refresh: re-fetch status, interfaces, containers and log in
+     *  parallel and suspend until they all land (so the spinner reflects real
+     *  work). Root status is refreshed separately by the caller. */
+    suspend fun refreshAllNow() = coroutineScope {
+        val s = async { APManager.getStatus() }
+        val ifs = async { APManager.getInterfaces() }
+        val cs = async { APManager.getContainers() }
+        status = s.await()
+        applyInterfaceList(ifs.await())
+        applyContainerList(cs.await())
+        logText = APManager.readLog()
     }
 
     private fun startPolling() {
         pollJob?.cancel()
         pollJob = viewModelScope.launch {
             while (isActive) {
+                delay(3000)   // initial state already loaded; poll afterwards
                 refreshStatus()
                 refreshLog()
-                delay(3000)
             }
         }
     }
@@ -122,16 +158,7 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadInterfaces() {
-        viewModelScope.launch {
-            val ifaces = APManager.getInterfaces()
-            interfaces = ifaces
-            // If the saved upstream is gone (e.g. WireGuard tunnel stopped), reset to auto.
-            // Without this, the dropdown label falls back to "Auto (recommended)" visually
-            // but config.upstream stays as the old iface name and gets sent to the backend.
-            if (config.upstream != "auto" && ifaces.none { it.name == config.upstream }) {
-                config = config.copy(upstream = "auto")
-            }
-        }
+        viewModelScope.launch { applyInterfaceList(APManager.getInterfaces()) }
     }
 
     private fun refreshLog() {
