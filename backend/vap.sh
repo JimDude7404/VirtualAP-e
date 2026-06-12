@@ -211,12 +211,26 @@ start_env() {
 
 kill_chroot_processes() {
     log "Killing chroot processes..."
+
+    # Primary: every process whose root is inside the chroot (hostapd,
+    # dnsmasq). Host-side readlink of /proc/<pid>/root - no lsof output
+    # format dependency.
+    local pid root
+    for pid in /proc/[0-9]*; do
+        pid="${pid#/proc/}"
+        root=$(readlink "/proc/$pid/root" 2>/dev/null)
+        case "$root" in
+            "$CHROOT_PATH"|"$CHROOT_PATH"/*) kill -9 "$pid" 2>/dev/null ;;
+        esac
+    done
+
+    # Secondary: processes holding files open inside the chroot without
+    # being chrooted themselves.
     local pids
-    pids=$(lsof 2>/dev/null | grep "$CHROOT_PATH" | awk '{print $2}' | uniq)
-    if [ -n "$pids" ]; then
-        kill -9 $pids 2>/dev/null
-        log "Killed chroot processes."
-    fi
+    pids=$(lsof 2>/dev/null | grep "$CHROOT_PATH" | awk '{print $2}' | sort -u)
+    [ -n "$pids" ] && kill -9 $pids 2>/dev/null
+
+    log "Killed chroot processes."
 }
 
 umount_env() {
@@ -243,7 +257,12 @@ stop_env() {
         local holder_pid
         holder_pid=$(cat "$HOLDER_PID_FILE")
         if kill -0 "$holder_pid" 2>/dev/null; then
-            kill "$holder_pid" 2>/dev/null && log "Killed namespace holder." || warn "Failed to kill holder."
+            # SIGKILL, not SIGTERM: as init of the PID namespace the holder
+            # ignores every signal it has no handler for (kernel rule), and
+            # busybox sleep handles nothing - plain kill is silently ignored.
+            # Killing the ns-init also makes the kernel reap every process in
+            # the namespace, including the zombies 'sleep' never wait()ed for.
+            kill -9 "$holder_pid" 2>/dev/null && log "Killed namespace holder." || warn "Failed to kill holder."
         fi
         rm -f "$HOLDER_PID_FILE" "$HOLDER_PID_FILE.flags"
     fi

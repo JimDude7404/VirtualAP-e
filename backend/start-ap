@@ -56,6 +56,9 @@ BAND="2"
 CHANNEL=""
 
 SCRIPT_NAME="$(basename "$0")"
+# vap.sh lives next to this script (both run from the app's files dir,
+# re-extracted from APK assets every launch - see Backend.kt), not in BASE_DIR.
+VAP_SH="$(dirname "$0")/vap.sh"
 
 # --- Busybox resolution ---
 if [ -x "$BASE_DIR/bin/busybox" ]; then
@@ -438,17 +441,10 @@ EOF
 # --- Subcommands ---
 
 cmd_start() {
-    # Ensure the chroot environment is up (idempotent)
-    # vap.sh lives next to this script (both run from the app's files dir,
-    # re-extracted from APK assets every launch - see Backend.kt), not in BASE_DIR.
-    sh "$(dirname "$0")/vap.sh" start -s || { error "Failed to start chroot environment"; exit 1; }
-
     [ -z "$SSID" ] && { error "SSID not set (use -s or save a config first)"; exit 1; }
     if [ "$(printf %s "$PASSWORD" | wc -c)" -lt 8 ]; then
         error "Password must be at least 8 characters."; exit 1
     fi
-
-    check_prerequisites || exit 1
 
     # Validate channel compatibility with selected band
     if [ -n "$CHANNEL" ]; then
@@ -477,21 +473,29 @@ cmd_start() {
     # before anything can fail - a failed attempt must not lose the config.
     save_conf
 
-    # Restart semantics: tear down any previous instance first
+    # Restart semantics: tear down any previous AP, then recycle the chroot.
+    # The namespace holder is the PID-ns init but never reaps reparented
+    # children (busybox sleep has no wait loop), so dead hostapd/dnsmasq pile
+    # up as zombies under it - a fresh namespace per AP session keeps the
+    # process table clean.
     [ -f "$STATE_FILE" ] && { log "Existing AP state found - restarting..."; teardown; }
+    sh "$VAP_SH" stop -s >/dev/null 2>&1
+    sh "$VAP_SH" start -s || { error "Failed to start chroot environment"; exit 1; }
+
+    check_prerequisites || exit 1
 
     resolve_upstream || exit 1
     pick_channel
 
-    trap 'teardown; exit 1' INT TERM
+    trap 'full_stop; exit 1' INT TERM
 
     if ! config_network; then
-        teardown
+        full_stop
         exit 1
     fi
 
     if ! start_services; then
-        teardown
+        full_stop
         exit 1
     fi
 
@@ -501,8 +505,18 @@ cmd_start() {
     log "  Upstream: ${UPSTREAM_IFACE_RESOLVED:-$UPSTREAM} (table $UPSTREAM_TABLE)"
 }
 
-cmd_stop() {
+# Full teardown: AP rules/services first, then the whole chroot. The chroot
+# exists only to serve the AP - killing the PID-namespace holder makes the
+# kernel reap every process in the namespace, including the zombies that
+# 'busybox sleep' (the ns init) never wait()ed for.
+full_stop() {
     teardown
+    sh "$VAP_SH" stop -s >/dev/null 2>&1
+    log "Chroot environment stopped."
+}
+
+cmd_stop() {
+    full_stop
 }
 
 cmd_status() {
