@@ -1,66 +1,68 @@
 # VirtualAP
 
-Turn your phone's WiFi chip into a **real router**.
+VirtualAP is a software utility designed to configure a virtual access point on rooted Android devices.
 
-VirtualAP creates a virtual access point (`ap0`) directly on the phone's WiFi hardware with:
+> [!NOTE]
+> This application is a proof of concept. The front-end user interface is developed with the assistance of an AI companion. The backend routing engine is derived from the pre-existing [Ubuntu-Chroot](https://github.com/ravindu644/Ubuntu-Chroot) project.
 
-- **Static gateway IP** (`192.168.42.1`) - unlike Android's built-in hotspot, the gateway
-  address never changes. Port forwards, bookmarks, and SSH configs stay valid forever.
-- **Selectable upstream** - Mobile Data, WiFi, Ethernet… or `wg0`: start a tunnel in the
-  official WireGuard app (kernel backend), pick `wg0` as upstream, and every connected
-  client is tunneled automatically.
-- **Auto upstream detection** - reads netd's default-network routing rule (the kernel's
-  ground truth for "which network has internet").
-- **DHCP + DNS** for clients via dnsmasq.
-- **5GHz channel-following** - the AP follows the STA's current channel (same-channel
-  concurrency), the root cause of why 5GHz "randomly failed" in older implementations.
-- **4.4MB Alpine rootfs** - carries only `hostapd`, `dnsmasq`, and `iw` (many phones ship
-  no `iw` binary); routing and firewall use Android's own `ip`/`iptables`.
+## Navigation
 
-## Repo layout
+* [Features](#features)
+* [Repository Layout](#repository-layout)
+* [Build Instructions](#build-instructions)
+* [Android Application Lifecycle](#android-application-lifecycle)
+* [Routing and Architecture](#routing-and-architecture)
+* [License](#license)
+
+## Features
+
+* **Configurable Gateway IP**: Unlike the default Android hotspot, the gateway address remains static. This ensures that port forwards, bookmarks, and SSH configurations remain valid.
+* **Selectable Upstream Interface**: Direct traffic through Mobile Data, Wi-Fi, Ethernet, or virtual interfaces like WireGuard tun0 to tunnel all connected clients automatically.
+* **Automatic Upstream Detection**: Reads the default network routing rules from the Android netd system to identify the active internet connection.
+* **DHCP and DNS Services**: Powered by dnsmasq inside the chroot environment to serve local clients.
+* **Same-Channel Concurrency**: The access point dynamically follows the Wi-Fi station channel. This addresses stability issues with 5GHz connectivity.
+* **Minimal Footprint**: Relies on a 4.4MB Alpine rootfs containing only hostapd, dnsmasq, and iw. Firewall and routing tasks leverage the native Android iptables and ip tools.
+
+## Repository Layout
 
 ```
 VirtualAP/
-├── Android/           ← companion app (root check, installer, AP control)
-├── backend/           ← shell backend: vap.sh (chroot core) + start-ap (AP engine)
-└── rootfs-builder/    ← Dockerfile + script to build the Alpine rootfs tarball
+├── Android/           ← Companion application (Root validation, installer, AP control)
+├── backend/           ← Shell backend: vap.sh (Chroot controller) and start-ap (AP engine)
+└── rootfs-builder/    ← Dockerfile and build scripts for the Alpine rootfs tarball
 ```
 
-## Build
+## Build Instructions
 
+### 1. Build the Alpine rootfs
+The rootfs build process requires Docker. It utilizes binfmt to cross-compile for arm64:
 ```bash
-# 1. Build the Alpine rootfs (needs Docker; cross-builds arm64 via binfmt)
 ./rootfs-builder/build_rootfs.sh
+```
 
-# 2. Build the Android APK (requires Droidspaces Ubuntu-24.04 container for JDK)
+### 2. Build the Android APK
+Compile the Android application using Gradle:
+```bash
 cd Android && ./gradlew assembleRelease
 ```
+The Gradle `prepareAssets` task executes automatically before compilation to copy `backend/vap.sh`, `backend/start-ap`, `backend/bin/busybox`, and the compiled rootfs tarball into the application assets.
 
-The Gradle `prepareAssets` pre-build task automatically copies `backend/vap.sh`,
-`backend/start-ap`, `backend/bin/busybox`, and the latest rootfs tarball from `out/`
-into the APK assets before each build.
+## Android Application Lifecycle
 
-## Android app
+Upon first execution, the application validates root privileges and deploys the backend environment to `/data/local/virtualap/`. The installation process extracts the bundled Alpine rootfs, copy the control scripts, and configures file permissions. The application operates independently without requiring Magisk modules or system reboots.
 
-On first launch the app checks root access, then installs the backend to
-`/data/local/virtualap/` via root shell (extracts the bundled Alpine rootfs, deploys the
-shell scripts, sets permissions). After that it works entirely standalone - no module to
-flash, no reboot required.
-
-## How it routes
+## Routing and Architecture
 
 ```
-client → ap0 (192.168.42.1, hostapd)
-       → ip rule pref 7010: from all iif ap0 lookup <upstream table>
-       → MASQUERADE (-s 192.168.42.0/24 ! -d 192.168.42.0/24)
-       → internet (or WireGuard tunnel)
-replies → ip rule pref 7000: to 192.168.42.0/24 lookup main → ap0
+client ➔ ap0 (Gateway IP, hostapd)
+       ➔ ip rule pref 7010: from all iif ap0 lookup <upstream table>
+       ➔ MASQUERADE (-s <subnet> ! -d <subnet>)
+       ➔ Internet or VPN tunnel
+replies ➔ ip rule pref 7000: to <subnet> lookup main ➔ ap0
 ```
 
-Pinned rule priorities sit above netd's entire range (10000+), so VPN catch-all rules can
-never hijack AP client traffic - and above Android's `32000: from all unreachable` guard
-that silently killed unpinned rules in older implementations.
+The routing rules are configured with high priority (7000 and 7010) to sit above the Android netd rule range. This prevents VPN configuration overrides from hijacking client traffic and bypasses the native unreachable guard rules.
 
 ## License
 
-MIT - Copyright (c) 2026 ravindu644
+This project is licensed under the MIT License. Copyright (c) 2026 ravindu644.
