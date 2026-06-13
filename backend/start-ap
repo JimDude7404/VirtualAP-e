@@ -575,16 +575,25 @@ provision_openwrt() {
     ds_run /etc/init.d/network reload >/dev/null 2>&1
     ds_run /etc/init.d/dnsmasq restart >/dev/null 2>&1
 
-    # Most Android kernels lack nf_tables (fw4 fails) but have x_tables, so
-    # prefer iptables-legacy. Detect and warn, never auto-install.
+    # Most Android kernels lack nf_tables (fw4 fails) but have x_tables, so we
+    # rely on iptables-legacy here.
     ds_run sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1
 
     if ds_run iptables-legacy --version >/dev/null 2>&1; then
-        ds_run iptables-legacy -t nat -D POSTROUTING -s "$VAP_LAN_NET" ! -d "$VAP_LAN_NET" -j MASQUERADE 2>/dev/null
-        if ds_run iptables-legacy -t nat -A POSTROUTING -s "$VAP_LAN_NET" ! -d "$VAP_LAN_NET" -j MASQUERADE; then
-            log "OpenWrt NAT installed (iptables-legacy MASQUERADE)."
+        # iptables-legacy world. If the container ships the iptables firewall
+        # (fw3) let it own NAT via its zones - our OpenWrt image bakes a
+        # 'vaplan' -> wan masqueraded zone, so a reload is all it takes.
+        # Otherwise install the MASQUERADE rule ourselves.
+        if ds_run ls /etc/init.d/firewall >/dev/null 2>&1; then
+            ds_run /etc/init.d/firewall reload >/dev/null 2>&1
+            log "OpenWrt firewall (fw3) reloaded - '$VAP_PORT' masqueraded via its wan zone."
         else
-            warn "OpenWrt: failed to add iptables-legacy MASQUERADE rule."
+            ds_run iptables-legacy -t nat -D POSTROUTING -s "$VAP_LAN_NET" ! -d "$VAP_LAN_NET" -j MASQUERADE 2>/dev/null
+            if ds_run iptables-legacy -t nat -A POSTROUTING -s "$VAP_LAN_NET" ! -d "$VAP_LAN_NET" -j MASQUERADE; then
+                log "OpenWrt NAT installed (iptables-legacy MASQUERADE)."
+            else
+                warn "OpenWrt: failed to add iptables-legacy MASQUERADE rule."
+            fi
         fi
     elif ds_run nft list ruleset >/dev/null 2>&1; then
         ds_run /etc/init.d/firewall reload >/dev/null 2>&1 || true
@@ -592,7 +601,7 @@ provision_openwrt() {
     else
         warn "OpenWrt has no iptables-legacy and no working nftables."
         warn "Clients will get an IP but NO internet. Inside the container, run:"
-        warn "    opkg update && opkg install iptables-zz-legacy"
+        warn "    opkg update && opkg install iptables-zz-legacy firewall"
     fi
     return 0
 }
