@@ -38,18 +38,21 @@ VirtualAP is a software utility designed to configure a virtual access point on 
 ```
 VirtualAP/
 ├── Android/           ← Companion application (Root validation, installer, AP control)
-├── backend/           ← start-ap (AP engine) and bin/ (static hostapd/iw/dnsmasq/busybox)
+├── backend/           ← start-ap (AP engine); bin/ is populated by the build (gitignored)
+├── externals/         ← Vendored source submodules: hostapd, iw, dnsmasq (our own forks)
 └── scripts/           ← Docker-based builder for the static aarch64 binaries
 ```
+
+The wireless tools are compiled from source on every build — no binaries are committed. The sources are vendored as git submodules under `externals/` (forks of [hostap](https://github.com/Droidspaces/hostapd-vap), [iw](https://github.com/Droidspaces/iw-vap), and [dnsmasq](https://github.com/Droidspaces/dnsmasq-vap)), so the build survives upstream disappearing. GitHub CI rebuilds everything from scratch on each run.
 
 ## Build Instructions
 
 ### 1. Build the static binaries
-The build runs in an emulated aarch64 Alpine container, so it only requires Docker:
+The build runs in an emulated aarch64 Alpine container, so it only requires Docker. It initializes the `externals/` submodules, compiles `hostapd`, `hostapd_cli`, `iw`, and `dnsmasq`, stages `busybox`, and copies all of them into `backend/bin/`:
 ```bash
 ./scripts/build-static.sh
 ```
-This produces `hostapd`, `hostapd_cli`, `iw`, `dnsmasq`, and `busybox` in `scripts/out/`; copy them into `backend/bin/`.
+(If you cloned without `--recursive`, the script runs `git submodule update --init` for you.)
 
 ### 2. Build the Android APK
 Compile the Android application using Gradle:

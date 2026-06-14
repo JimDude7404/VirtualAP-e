@@ -7,16 +7,16 @@
 #   dnsmasq                - DHCP + DNS for AP clients
 #   busybox                - reliable coreutils (Alpine's busybox-static)
 #
-# Output -> /work/out, source cache -> /work/.src-cache
+# Sources come from the vendored git submodules, bind-mounted read-only at
+# /externals/{hostapd,iw,dnsmasq} (our own forks - see externals/ and
+# .gitmodules). They are copied out before building so the mount stays clean.
+#
+# Output -> /work/out, build scratch -> /work/.src-cache
 set -e
 
 OUT=/work/out
 SRC=/work/.src-cache
 mkdir -p "$OUT" "$SRC"
-
-# Pinned versions (override via env from build-static.sh).
-IW_VER="${IW_VER:-6.17}"
-DM_VER="${DM_VER:-2.91}"
 
 # Fully static, no PIE: a plain -static link on Alpine yields a static-PIE that
 # still needs /lib/ld-musl-*.so.1 at runtime (absent on Android). -no-pie gives
@@ -24,8 +24,16 @@ DM_VER="${DM_VER:-2.91}"
 LDF="-static -no-pie"
 CF="-Os -fno-pie"
 
+# Copy a vendored source tree out of the read-only mount (drop the submodule
+# .git pointer - the build doesn't need it).
+vendor() {
+    rm -rf "$SRC/$1"
+    cp -a "/externals/$1" "$SRC/$1"
+    rm -rf "$SRC/$1/.git"
+}
+
 echo "### Installing build deps"
-apk add --no-cache build-base linux-headers pkgconf git wget xz \
+apk add --no-cache build-base linux-headers pkgconf \
     libnl3-dev libnl3-static openssl-dev openssl-libs-static busybox-static >/dev/null
 
 # --- busybox ---------------------------------------------------------------
@@ -37,9 +45,8 @@ strip "$OUT/busybox" 2>/dev/null || true
 
 # --- hostapd ---------------------------------------------------------------
 echo "### Building hostapd"
-cd "$SRC"
-[ -d hostap ] || git clone --depth=1 https://w1.fi/hostap.git
-cd hostap/hostapd
+vendor hostapd
+cd "$SRC/hostapd/hostapd"
 cat > .config <<EOF
 CONFIG_DRIVER_NL80211=y
 CONFIG_LIBNL32=y
@@ -56,12 +63,9 @@ strip hostapd hostapd_cli
 cp hostapd hostapd_cli "$OUT"/
 
 # --- iw --------------------------------------------------------------------
-echo "### Building iw $IW_VER"
-cd "$SRC"
-[ -f "iw-$IW_VER.tar.xz" ] || \
-    wget -q "https://mirrors.edge.kernel.org/pub/software/network/iw/iw-$IW_VER.tar.xz"
-rm -rf "iw-$IW_VER" && tar xf "iw-$IW_VER.tar.xz"
-cd "iw-$IW_VER"
+echo "### Building iw"
+vendor iw
+cd "$SRC/iw"
 make clean >/dev/null 2>&1 || true
 # iw's Makefile does `LDFLAGS += $(pkg-config --libs ...)`, so LDFLAGS must come
 # from the ENVIRONMENT (not a make-cmdline override, which would suppress the +=).
@@ -73,21 +77,24 @@ strip iw
 cp iw "$OUT"/
 
 # --- dnsmasq ---------------------------------------------------------------
-echo "### Building dnsmasq $DM_VER"
-cd "$SRC"
-[ -f "dnsmasq-$DM_VER.tar.xz" ] || \
-    wget -q "https://thekelleys.org.uk/dnsmasq/dnsmasq-$DM_VER.tar.xz"
-rm -rf "dnsmasq-$DM_VER" && tar xf "dnsmasq-$DM_VER.tar.xz"
-cd "dnsmasq-$DM_VER"
-# Android has no "root" entry in /etc/passwd and static musl (unlike bionic)
-# does not synthesize one, so dnsmasq's getpwnam("root") privilege-drop fails
-# with "unknown user or group: root". Skip the lookup when user=root: ent_pw
-# stays NULL, the setuid block is guarded by `if (ent_pw ...)`, so dnsmasq
-# simply stays root (which it needs anyway to bind :53/:67).
-sed -i \
-    's/if (daemon->username \&\& !(ent_pw = getpwnam(daemon->username)))/if (daemon->username \&\& strcmp(daemon->username, "root") != 0 \&\& !(ent_pw = getpwnam(daemon->username)))/' \
-    src/dnsmasq.c
-grep -q 'strcmp(daemon->username, "root")' src/dnsmasq.c || { echo "dnsmasq root-user patch FAILED to apply"; exit 1; }
+echo "### Building dnsmasq"
+vendor dnsmasq
+cd "$SRC/dnsmasq"
+# The getpwnam("root") privilege-drop is patched out directly in our fork
+# (Droidspaces/dnsmasq-vap): Android has no root entry in /etc/passwd and static
+# musl (unlike bionic) won't synthesize one, so stock dnsmasq dies with "unknown
+# user or group: root". The in-tree patch leaves ent_pw NULL for user=root, and
+# the setuid block is guarded by it, so dnsmasq just stays root (needed for
+# :53/:67). The old build-time sed is kept here (disabled) for reference:
+#
+# sed -i \
+#     's/if (daemon->username \&\& !(ent_pw = getpwnam(daemon->username)))/if (daemon->username \&\& strcmp(daemon->username, "root") != 0 \&\& !(ent_pw = getpwnam(daemon->username)))/' \
+#     src/dnsmasq.c
+#
+# Assert the vendored source actually carries the patch (catches a submodule
+# bumped to an unpatched upstream).
+grep -q 'strcmp(daemon->username, "root")' src/dnsmasq.c || {
+    echo "dnsmasq source is missing the getpwnam(root) patch - check externals/dnsmasq"; exit 1; }
 make clean >/dev/null 2>&1 || true
 # Default dnsmasq has no external lib deps; plain static link works.
 make -j"$(nproc)" CFLAGS="$CF" LDFLAGS="$LDF"

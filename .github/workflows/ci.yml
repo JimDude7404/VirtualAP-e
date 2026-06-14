@@ -18,10 +18,25 @@ on:
 
 jobs:
   build:
-    name: Build Rootfs & Android App
+    name: Build Binaries & Android App
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        # Vendored sources (hostapd/iw/dnsmasq) live in externals/ submodules.
+        submodules: recursive
+
+    - name: Set up QEMU (arm64 emulation)
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm64
+
+    - name: Build static binaries from source
+      # Compiles hostapd/iw/dnsmasq (+ busybox) in an aarch64 Alpine container
+      # from the externals/ submodules and stages them into backend/bin.
+      run: |
+        chmod +x scripts/build-static.sh scripts/build-in-container.sh
+        ./scripts/build-static.sh
 
     - name: Set up JDK 17
       uses: actions/setup-java@v4
@@ -29,12 +44,6 @@ jobs:
         java-version: '17'
         distribution: 'temurin'
         cache: gradle
-
-    - name: Grant execute permission for builder script
-      run: chmod +x rootfs-builder/build_rootfs.sh
-
-    - name: Build Rootfs
-      run: ./rootfs-builder/build_rootfs.sh
 
     - name: Decode Keystore
       env:
@@ -57,22 +66,19 @@ jobs:
           -PKEY_ALIAS="$KEY_ALIAS" \
           -PKEY_PASSWORD="$KEY_PASSWORD"
 
-    - name: Stage & Rename Artifacts
+    - name: Stage & Rename Artifact
       run: |
         TAG="${{ github.event.inputs.tag_name || 'test' }}"
         DATE=$(date +%Y-%m-%d)
         APK_NAME="VirtualAP-${TAG}-${DATE}.apk"
-        ROOTFS_NAME=$(basename $(ls out/VirtualAP-rootfs-*.tar.xz))
         mkdir -p dist
         mv Android/app/build/outputs/apk/release/app-release.apk dist/${APK_NAME}
-        cp out/${ROOTFS_NAME} dist/
         echo "APK_FILE=dist/${APK_NAME}" >> $GITHUB_ENV
-        echo "ROOTFS_FILE=dist/${ROOTFS_NAME}" >> $GITHUB_ENV
 
-    - name: Upload Final Artifacts (APK & Rootfs)
+    - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: virtualap-artifacts
+        name: virtualap-apk
         path: dist/
 
   release:
@@ -129,4 +135,3 @@ jobs:
           **Automated Release by VirtualAP CI**
         files: |
           release-assets/*.apk
-          release-assets/*.tar.xz

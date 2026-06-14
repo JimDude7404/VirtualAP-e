@@ -1,6 +1,9 @@
 out/
 scripts/.src-cache/
-backend/bin/busybox
+# Binaries are built from the externals/ submodules by scripts/build-static.sh
+# (in CI on every run), never committed. Keep the dir via .gitkeep.
+backend/bin/*
+!backend/bin/.gitkeep
 .DS_Store
 Android/.gradle/
 Android/app/build/

@@ -193,8 +193,11 @@ tasks.register("prepareAssets") {
         println("prepareAssets: copied start-ap")
 
         // Copy the static binaries (busybox + hostapd/hostapd_cli/iw/dnsmasq).
+        // Skip dotfiles like .gitkeep - only real binaries ship.
         val binSrc = File(toolsSrc, "bin")
-        val binaries = binSrc.listFiles()?.filter { it.isFile }?.sortedBy { it.name } ?: emptyList()
+        val binaries = binSrc.listFiles()
+            ?.filter { it.isFile && !it.name.startsWith(".") }
+            ?.sortedBy { it.name } ?: emptyList()
         require(binaries.isNotEmpty()) {
             "prepareAssets: no binaries in ${binSrc.absolutePath}. Run scripts/build-static.sh first."
         }
