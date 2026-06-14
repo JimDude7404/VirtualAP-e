@@ -68,6 +68,13 @@ strip "$OUT/busybox" 2>/dev/null || true
 echo "### Building hostapd"
 vendor hostapd
 cd "$SRC/hostapd/hostapd"
+# Assert the fork wires no_pri_sec_switch into the config parser. start-ap emits
+# no_pri_sec_switch=1 for HT40/VHT to skip the OBSS coexistence scan, which
+# FullMAC chips (Broadcom brcmfmac on the Galaxy S10) abort with -95. Stock
+# hostapd has the struct field but no parser line, so an unpatched submodule
+# would silently reject the option and crash on 40/80MHz. (See externals/hostapd.)
+grep -q 'no_pri_sec_switch' config_file.c || {
+    echo "hostapd source is missing the no_pri_sec_switch config patch - check externals/hostapd"; exit 1; }
 cat > .config <<'EOF'
 CONFIG_DRIVER_NL80211=y
 CONFIG_LIBNL32=y

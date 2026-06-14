@@ -531,15 +531,26 @@ write_hostapd_conf() {
         # max chip compatibility (width is independent of it).
         extra="ieee80211n=1
 ieee80211ac=1"
+        # no_pri_sec_switch=1 skips hostapd's 20/40MHz OBSS coexistence scan
+        # (the HT_SCAN state). FullMAC chips (e.g. Broadcom/brcmfmac on the
+        # Galaxy S10) can't scan on an AP vif and return -95 (Not supported),
+        # which aborts hostapd whenever HT40/VHT is requested. The firmware
+        # self-manages the channel, so skipping the scan is safe. We set HT40+/-
+        # explicitly, so the pri/sec auto-switch this also disables is unwanted
+        # anyway. Only needed for HT40/VHT (20MHz has no ht_capab, no HT_SCAN).
+        # Requires the hostapd-vap fork's config-parser wiring (the upstream
+        # struct field exists but is otherwise unreachable from hostapd.conf).
         if [ "$EFFECTIVE_WIDTH" = "80" ]; then
             seg0=$(vht_seg0 "$CHANNEL"); dir=$(ht40_dir "$CHANNEL" "$seg0")
             extra="$extra
+no_pri_sec_switch=1
 ht_capab=[HT40$dir]
 vht_oper_chwidth=1
 vht_oper_centr_freq_seg0_idx=$seg0"
         elif [ "$EFFECTIVE_WIDTH" = "40" ]; then
             seg0=$(vht_seg0 "$CHANNEL"); dir=$(ht40_dir "$CHANNEL" "$seg0")
             extra="$extra
+no_pri_sec_switch=1
 ht_capab=[HT40$dir]
 vht_oper_chwidth=0"
         fi
