@@ -1,4 +1,5 @@
 out/
+scripts/.src-cache/
 backend/bin/busybox
 .DS_Store
 Android/.gradle/
