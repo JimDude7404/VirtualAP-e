@@ -71,6 +71,10 @@ class PreferencesManager private constructor(context: Context) {
         get() = prefs.getString(Constants.KEY_AP_CHANNEL, "") ?: ""
         set(value) { prefs.edit().putString(Constants.KEY_AP_CHANNEL, value).apply() }
 
+    var apWidth: String
+        get() = prefs.getString(Constants.KEY_AP_WIDTH, "20") ?: "20"
+        set(value) { prefs.edit().putString(Constants.KEY_AP_WIDTH, value).apply() }
+
     var apUpstream: String
         get() = prefs.getString(Constants.KEY_AP_UPSTREAM, "auto") ?: "auto"
         set(value) { prefs.edit().putString(Constants.KEY_AP_UPSTREAM, value).apply() }

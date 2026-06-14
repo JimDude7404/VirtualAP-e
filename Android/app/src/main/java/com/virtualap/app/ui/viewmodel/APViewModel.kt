@@ -25,6 +25,7 @@ data class APConfig(
     val password: String = "",
     val band: String = "2",
     val channel: String = "",
+    val width: String = "20",
     val upstream: String = "auto",
     val gateway: String = "192.168.42.1",
     val dnsServers: String = "",
@@ -44,6 +45,7 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
             password = prefs.apPassword,
             band = prefs.apBand,
             channel = validChannelForBand(prefs.apBand, prefs.apChannel),
+            width = prefs.apWidth,
             upstream = prefs.apUpstream,
             gateway = prefs.apGateway,
             dnsServers = prefs.apDnsServers,
@@ -80,6 +82,7 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.apPassword = cfg.password
                 prefs.apBand = cfg.band
                 prefs.apChannel = cfg.channel
+                prefs.apWidth = cfg.width
                 prefs.apUpstream = cfg.upstream
                 prefs.apGateway = cfg.gateway
                 prefs.apDnsServers = cfg.dnsServers
@@ -179,6 +182,7 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
             APManager.start(
                 cfg.ssid, cfg.password, cfg.upstream, cfg.band,
                 cfg.channel.takeIf { it.isNotBlank() },
+                cfg.width,
                 cfg.gateway, cfg.dnsServers.takeIf { it.isNotBlank() },
                 cfg.hidden,
                 if (cfg.containerMode) cfg.containerName else ""

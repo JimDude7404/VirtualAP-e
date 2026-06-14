@@ -40,6 +40,7 @@
     <string name="show_password_desc">Show password</string>
     <string name="band_label">Band</string>
     <string name="channel_label">Channel</string>
+    <string name="width_label">Channel Width</string>
     <string name="upstream_interface_label">Upstream Interface</string>
     <string name="upstream_auto">Auto (recommended)</string>
     <string name="upstream_card_title">Upstream</string>

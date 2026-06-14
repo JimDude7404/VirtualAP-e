@@ -267,7 +267,8 @@ fun MainScreen(
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         onClick = {
-                                            vm.config = vm.config.copy(band = value, channel = "")
+                                            val newWidth = if (value == "2" && vm.config.width == "80") "40" else vm.config.width
+                                            vm.config = vm.config.copy(band = value, channel = "", width = newWidth)
                                             bandExpanded = false
                                         }
                                     )
@@ -311,6 +312,45 @@ fun MainScreen(
                                         onClick = {
                                             vm.config = vm.config.copy(channel = value)
                                             channelExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+
+                        // Width dropdown
+                        var widthExpanded by remember { mutableStateOf(false) }
+                        val widthOptions = if (vm.config.band == "5") {
+                            listOf("20 MHz" to "20", "40 MHz" to "40", "80 MHz" to "80")
+                        } else {
+                            listOf("20 MHz" to "20", "40 MHz" to "40")
+                        }
+                        val selectedWidthLabel = widthOptions.find { it.second == vm.config.width }?.first ?: "20 MHz"
+
+                        ExposedDropdownMenuBox(
+                            expanded = widthExpanded,
+                            onExpandedChange = { if (!status.running) widthExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedWidthLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.width_label)) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = widthExpanded) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                enabled = !status.running
+                            )
+                            ExposedDropdownMenu(
+                                expanded = widthExpanded,
+                                onDismissRequest = { widthExpanded = false }
+                            ) {
+                                widthOptions.forEach { (label, value) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            vm.config = vm.config.copy(width = value)
+                                            widthExpanded = false
                                         }
                                     )
                                 }
@@ -682,6 +722,7 @@ private fun ActiveNetworkCard(vm: APViewModel) {
         else -> status.band ?: "—"
     }
     val channel = status.channel?.let { " · ch$it" } ?: ""
+    val width = status.width?.let { " · ${it}MHz" } ?: ""
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -760,7 +801,7 @@ private fun ActiveNetworkCard(vm: APViewModel) {
                     DashboardStatRow(
                         icon = Icons.Default.SignalCellularAlt,
                         label = stringResource(R.string.band_label),
-                        value = "$band$channel"
+                        value = "$band$channel$width"
                     )
                 }
                 Column(

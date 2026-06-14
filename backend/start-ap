@@ -47,6 +47,7 @@ SSID=""
 PASSWORD=""
 BAND="2"
 CHANNEL=""
+WIDTH="20"
 DNS_SERVERS=""
 HIDDEN="0"
 
@@ -111,6 +112,8 @@ error() { $ECHO "[ERROR] $1";  $ECHO "[$($DATE '+%Y-%m-%d %H:%M:%S')] [ERROR] $1
 
 load_conf() {
     [ -f "$CONF_FILE" ] && . "$CONF_FILE"
+    # Migration: default WIDTH if not in ap.conf
+    WIDTH="${WIDTH:-20}"
 }
 
 # Escape single quotes so a password with " or $ can't break out of the conf file.
@@ -124,6 +127,7 @@ SSID='$(sq "$SSID")'
 PASSWORD='$(sq "$PASSWORD")'
 BAND='$(sq "$BAND")'
 CHANNEL='$(sq "$CHANNEL")'
+WIDTH='$(sq "$WIDTH")'
 IP_GW='$(sq "$IP_GW")'
 DNS_SERVERS='$(sq "$DNS_SERVERS")'
 HIDDEN='$(sq "$HIDDEN")'
@@ -425,6 +429,7 @@ upstream_table=$UPSTREAM_TABLE
 upstream_iface=$UPSTREAM_IFACE_RESOLVED
 band=$BAND
 channel=$CHANNEL
+width=$WIDTH
 ssid=$SSID
 gateway=$IP_GW
 dns_servers=$DNS_SERVERS
@@ -441,13 +446,40 @@ EOF
 write_hostapd_conf() {
     local hb="$1" country hw_mode extra
     country=$(reg_country)
+
+    extra="ieee80211n=1"
     if [ "$BAND" = "5" ]; then
         hw_mode="a"
-        extra="ieee80211n=1
+        extra="$extra
 ieee80211ac=1"
     else
         hw_mode="g"
-        extra="ieee80211n=1"
+    fi
+
+    if [ "$WIDTH" = "40" ] || [ "$WIDTH" = "80" ]; then
+        local ht_cap=""
+        if [ "$BAND" = "2" ]; then
+            if [ "$CHANNEL" -le 7 ]; then ht_cap="[HT40+]"; else ht_cap="[HT40-]"; fi
+        else
+            if [ "$(( (CHANNEL / 4) % 2 ))" -eq 1 ]; then ht_cap="[HT40+]"; else ht_cap="[HT40-]"; fi
+        fi
+        extra="$extra
+ht_capab=$ht_cap"
+
+        if [ "$BAND" = "5" ] && [ "$WIDTH" = "80" ]; then
+            extra="$extra
+vht_oper_chwidth=1"
+            local vht_center=""
+            if [ "$CHANNEL" -ge 36 ] && [ "$CHANNEL" -le 48 ]; then vht_center="42"
+            elif [ "$CHANNEL" -ge 52 ] && [ "$CHANNEL" -le 64 ]; then vht_center="58"
+            elif [ "$CHANNEL" -ge 100 ] && [ "$CHANNEL" -le 112 ]; then vht_center="106"
+            elif [ "$CHANNEL" -ge 116 ] && [ "$CHANNEL" -le 128 ]; then vht_center="122"
+            elif [ "$CHANNEL" -ge 132 ] && [ "$CHANNEL" -le 144 ]; then vht_center="138"
+            elif [ "$CHANNEL" -ge 149 ] && [ "$CHANNEL" -le 161 ]; then vht_center="155"
+            fi
+            [ -n "$vht_center" ] && extra="$extra
+vht_oper_centr_freq_seg0_idx=$vht_center"
+        fi
     fi
 
     $CAT > "$RUN_DIR/hostapd.conf" <<EOF
@@ -644,6 +676,7 @@ container=$CONTAINER
 bridge=$VAP_BRIDGE
 band=$BAND
 channel=$CHANNEL
+width=$WIDTH
 ssid=$SSID
 gateway=$VAP_LAN_GW
 started=$($DATE '+%Y-%m-%d %H:%M:%S')
@@ -804,7 +837,7 @@ cmd_status() {
     $ECHO "clients=$clients"
     # gateway/ssid/etc. come from the state file (routed: IP_GW; bridged: VAP_LAN_GW)
     if [ -f "$STATE_FILE" ]; then
-        $GREP -E '^(ssid|band|channel|upstream|upstream_table|upstream_iface|gateway|dns_servers|container|started)=' "$STATE_FILE"
+        $GREP -E '^(ssid|band|channel|width|upstream|upstream_table|upstream_iface|gateway|dns_servers|container|started)=' "$STATE_FILE"
     else
         $ECHO "gateway=$IP_GW"
     fi
@@ -852,6 +885,7 @@ print_usage() {
     $ECHO "  -o <iface>     Upstream interface, or 'auto' (default: auto)"
     $ECHO "  -b <band>      2 = 2.4GHz (default), 5 = 5GHz"
     $ECHO "  -c <channel>   Channel (auto-picked / STA-followed when omitted)"
+    $ECHO "  -L <width>     Width: 20 (default), 40, 80"
     $ECHO "  -g <gateway>   Custom gateway IP (default: 192.168.42.1)"
     $ECHO "  -d <dns>       Comma-separated list of upstream DNS servers"
     $ECHO "  -w <iface>     Physical WiFi interface (default: wlan0)"
@@ -868,13 +902,14 @@ COMMAND="$1"
 # Saved config provides defaults; CLI flags override
 load_conf
 
-while getopts "s:p:o:b:c:w:g:d:H:K:h" opt 2>/dev/null; do
+while getopts "s:p:o:b:c:L:w:g:d:H:K:h" opt 2>/dev/null; do
     case $opt in
         s) SSID="$OPTARG" ;;
         p) PASSWORD="$OPTARG" ;;
         o) UPSTREAM="$OPTARG" ;;
         b) BAND="$OPTARG" ;;
         c) CHANNEL="$OPTARG" ;;
+        L) WIDTH="$OPTARG" ;;
         w) PHY_IFACE="$OPTARG" ;;
         g) IP_GW="$OPTARG" ;;
         d) DNS_SERVERS="$OPTARG" ;;

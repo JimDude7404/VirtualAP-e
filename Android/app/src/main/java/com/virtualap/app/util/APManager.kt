@@ -15,6 +15,7 @@ data class APStatus(
     val ssid: String? = null,
     val band: String? = null,
     val channel: String? = null,
+    val width: String? = null,
     val upstream: String? = null,
     val upstreamIface: String? = null,
     val upstreamTable: String? = null,
@@ -49,6 +50,7 @@ object APManager {
             ssid = kv["ssid"],
             band = kv["band"],
             channel = kv["channel"],
+            width = kv["width"],
             upstream = kv["upstream"],
             upstreamIface = kv["upstream_iface"],
             upstreamTable = kv["upstream_table"],
@@ -60,7 +62,7 @@ object APManager {
 
     suspend fun start(
         ssid: String, password: String, upstream: String,
-        band: String, channel: String?, gateway: String, dnsServers: String?,
+        band: String, channel: String?, width: String, gateway: String, dnsServers: String?,
         hidden: Boolean = false, container: String = "",
         onLine: (Int, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
@@ -70,7 +72,7 @@ object APManager {
         val hiddenVal = if (hidden) "1" else "0"
         // -K is always passed (empty clears managed mode) so a stale CONTAINER
         // in ap.conf never silently re-enables it.
-        val cmd = "${Backend.startAp} start -s ${sq(ssid)} -p ${sq(password)} -o ${sq(upstream)} -b ${sq(band)} -c ${sq(channelVal)} -g ${sq(gateway)} -d ${sq(dnsVal)} -H $hiddenVal -K ${sq(container)}"
+        val cmd = "${Backend.startAp} start -s ${sq(ssid)} -p ${sq(password)} -o ${sq(upstream)} -b ${sq(band)} -c ${sq(channelVal)} -L ${sq(width)} -g ${sq(gateway)} -d ${sq(dnsVal)} -H $hiddenVal -K ${sq(container)}"
 
         val outputList = object : com.topjohnwu.superuser.CallbackList<String>() {
             override fun onAddElement(e: String?) {
