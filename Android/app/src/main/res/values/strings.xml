@@ -43,7 +43,7 @@
     <string name="channel_label">Channel</string>
     <string name="width_label">Channel Width</string>
     <string name="security_label">Security</string>
-    <string name="security_wpa3_hint">WPA3 isn\'t supported by some older devices — they may fail to connect. Use WPA2-Personal for maximum compatibility.</string>
+    <string name="security_wpa3_hint">WPA3 may not work on every device. Some phones bring up the hotspot but clients fail to connect or get no IP, and older client devices may not join at all. Use WPA2-Personal for the best compatibility.</string>
     <string name="upstream_interface_label">Upstream Interface</string>
     <string name="upstream_auto">Auto (recommended)</string>
     <string name="upstream_card_title">Upstream</string>
