@@ -1,10 +1,11 @@
 #!/bin/sh
 #
 # Runs INSIDE an aarch64 Alpine container (see build-static.sh).
-# Builds fully-static, non-PIE aarch64 binaries for VirtualAP:
+# Produces the static aarch64 binaries for VirtualAP:
 #   hostapd + hostapd_cli  - AP daemon (nl80211, WPA2-PSK)
 #   iw                     - virtual interface management
 #   dnsmasq                - DHCP + DNS for AP clients
+#   busybox                - reliable coreutils (Alpine's busybox-static)
 #
 # Output -> /work/out, source cache -> /work/.src-cache
 set -e
@@ -25,7 +26,14 @@ CF="-Os -fno-pie"
 
 echo "### Installing build deps"
 apk add --no-cache build-base linux-headers pkgconf git wget xz \
-    libnl3-dev libnl3-static openssl-dev openssl-libs-static >/dev/null
+    libnl3-dev libnl3-static openssl-dev openssl-libs-static busybox-static >/dev/null
+
+# --- busybox ---------------------------------------------------------------
+# Alpine's busybox-static is already a fully-static binary; just ship it. Used
+# by the backend scripts for reliable coreutils (Android's toybox is flaky).
+echo "### Staging static busybox"
+cp /bin/busybox.static "$OUT/busybox"
+strip "$OUT/busybox" 2>/dev/null || true
 
 # --- hostapd ---------------------------------------------------------------
 echo "### Building hostapd"
@@ -89,7 +97,7 @@ cp src/dnsmasq "$OUT"/
 # --- Verify ----------------------------------------------------------------
 echo "### Results"
 cd "$OUT"
-for b in hostapd hostapd_cli iw dnsmasq; do
+for b in busybox hostapd hostapd_cli iw dnsmasq; do
     printf '%-12s ' "$b"
     file -b "$b"
 done

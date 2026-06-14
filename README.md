@@ -3,7 +3,7 @@
 VirtualAP is a software utility designed to configure a virtual access point on rooted Android devices.
 
 > [!NOTE]
-> This application is a proof of concept. The front-end user interface is developed with the assistance of an AI companion. The backend routing engine is derived from the pre-existing [Ubuntu-Chroot](https://github.com/ravindu644/Ubuntu-Chroot) project.
+> This application is a proof of concept. The front-end user interface is developed with the assistance of an AI companion. The backend originally ran its wireless stack inside an Alpine chroot (a technique borrowed from the [Ubuntu-Chroot](https://github.com/ravindu644/Ubuntu-Chroot) project); it now ships hostapd/iw/dnsmasq as fully-static binaries that run directly on Android.
 
 ## Navigation
 
@@ -29,37 +29,38 @@ VirtualAP is a software utility designed to configure a virtual access point on 
 * **VPN Hotspot**: Set a VPN tunnel interface (such as WireGuard tun0) as the upstream. All devices connected to the hotspot are automatically routed through the VPN, turning your phone into a portable VPN access point.
 * **Managed Mode (Container-Routed Hotspot)**: Hand the hotspot's LAN to a running [Droidspaces](https://github.com/ravindu644/Droidspaces) container with `-K`. VirtualAP keeps only the wireless and Layer-2 plumbing while the container owns DHCP, DNS, NAT, and firewalling. A single OpenWrt container can therefore route the Wi-Fi hotspot and its Droidspaces gateway-mode containers at the same time, all from one LuCI control plane.
 * **Automatic Upstream Detection**: Reads the default network routing rules from the Android netd system to identify the active internet connection.
-* **DHCP and DNS Services**: Powered by dnsmasq inside the chroot environment to serve local clients.
+* **DHCP and DNS Services**: Powered by dnsmasq to serve local clients.
 * **Same-Channel Concurrency**: The access point dynamically follows the Wi-Fi station channel. This addresses stability issues with 5GHz connectivity.
-* **Minimal Footprint**: Relies on a 4.4MB Alpine rootfs containing only hostapd, dnsmasq, and iw. Firewall and routing tasks leverage the native Android iptables and ip tools.
+* **Minimal Footprint**: Ships `hostapd`, `dnsmasq`, `iw`, and `busybox` as fully-static aarch64 binaries that run directly on Android — no chroot, no namespaces. Firewall and routing tasks leverage the native Android iptables and ip tools.
 
 ## Repository Layout
 
 ```
 VirtualAP/
 ├── Android/           ← Companion application (Root validation, installer, AP control)
-├── backend/           ← Shell backend: vap.sh (Chroot controller) and start-ap (AP engine)
-└── rootfs-builder/    ← Dockerfile and build scripts for the Alpine rootfs tarball
+├── backend/           ← start-ap (AP engine) and bin/ (static hostapd/iw/dnsmasq/busybox)
+└── scripts/           ← Docker-based builder for the static aarch64 binaries
 ```
 
 ## Build Instructions
 
-### 1. Build the Alpine rootfs
-The rootfs build process requires Docker. It utilizes binfmt to cross-compile for arm64:
+### 1. Build the static binaries
+The build runs in an emulated aarch64 Alpine container, so it only requires Docker:
 ```bash
-./rootfs-builder/build_rootfs.sh
+./scripts/build-static.sh
 ```
+This produces `hostapd`, `hostapd_cli`, `iw`, `dnsmasq`, and `busybox` in `scripts/out/`; copy them into `backend/bin/`.
 
 ### 2. Build the Android APK
 Compile the Android application using Gradle:
 ```bash
 cd Android && ./gradlew assembleRelease
 ```
-The Gradle `prepareAssets` task executes automatically before compilation to copy `backend/vap.sh`, `backend/start-ap`, `backend/bin/busybox`, and the compiled rootfs tarball into the application assets.
+The Gradle `prepareAssets` task executes automatically before compilation to copy `backend/start-ap` and every binary under `backend/bin/` into the application assets, alongside a `PAYLOAD_VERSION` marker (a hash of the binaries) used to detect updates.
 
 ## Android Application Lifecycle
 
-Upon first execution, the application validates root privileges and deploys the backend environment to `/data/local/virtualap/`. The installation process extracts the bundled Alpine rootfs, copy the control scripts, and configures file permissions. The application operates independently without requiring Magisk modules or system reboots.
+Upon first execution, the application validates root privileges and deploys the backend to `/data/local/virtualap/bin`. The installation process copies the bundled static binaries and configures file permissions. Root and backend integrity are re-checked on every launch: if root is revoked the full-screen root gate reappears, and if any binary is missing (e.g. the directory was wiped) the setup flow re-deploys it automatically. The application operates independently without requiring Magisk modules or system reboots.
 
 ## Routing and Architecture
 
