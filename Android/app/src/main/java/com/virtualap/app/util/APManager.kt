@@ -15,6 +15,7 @@ data class APStatus(
     val ssid: String? = null,
     val band: String? = null,
     val channel: String? = null,
+    val width: String? = null,          // actual channel width in MHz while running
     val upstream: String? = null,
     val upstreamIface: String? = null,
     val upstreamTable: String? = null,
@@ -24,6 +25,14 @@ data class APStatus(
 )
 
 data class NetworkIface(val name: String, val ip: String?)
+
+/**
+ * 5GHz channel-width support of the Wi-Fi chip, reported by `start-ap caps`. Used
+ * to grey out width options the chip can't do. 20MHz is always available; 2.4GHz
+ * is fixed to 20MHz regardless of these. Defaults to false so only Auto/20 are
+ * offered until caps are read.
+ */
+data class ApCaps(val ht40: Boolean = false, val vht: Boolean = false)
 
 
 object APManager {
@@ -49,6 +58,7 @@ object APManager {
             ssid = kv["ssid"],
             band = kv["band"],
             channel = kv["channel"],
+            width = kv["width"],
             upstream = kv["upstream"],
             upstreamIface = kv["upstream_iface"],
             upstreamTable = kv["upstream_table"],
@@ -60,7 +70,7 @@ object APManager {
 
     suspend fun start(
         ssid: String, password: String, upstream: String,
-        band: String, channel: String?, gateway: String, dnsServers: String?,
+        band: String, channel: String?, width: String, gateway: String, dnsServers: String?,
         hidden: Boolean = false, container: String = "",
         onLine: (Int, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
@@ -70,7 +80,7 @@ object APManager {
         val hiddenVal = if (hidden) "1" else "0"
         // -K is always passed (empty clears managed mode) so a stale CONTAINER
         // in ap.conf never silently re-enables it.
-        val cmd = "${Backend.startAp} start -s ${sq(ssid)} -p ${sq(password)} -o ${sq(upstream)} -b ${sq(band)} -c ${sq(channelVal)} -g ${sq(gateway)} -d ${sq(dnsVal)} -H $hiddenVal -K ${sq(container)}"
+        val cmd = "${Backend.startAp} start -s ${sq(ssid)} -p ${sq(password)} -o ${sq(upstream)} -b ${sq(band)} -c ${sq(channelVal)} -W ${sq(width)} -g ${sq(gateway)} -d ${sq(dnsVal)} -H $hiddenVal -K ${sq(container)}"
 
         val outputList = object : com.topjohnwu.superuser.CallbackList<String>() {
             override fun onAddElement(e: String?) {
@@ -104,6 +114,18 @@ object APManager {
         val result = Shell.cmd("${Backend.startAp} containers 2>/dev/null").exec()
         if (!result.isSuccess) return@withContext emptyList()
         result.out.map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    /** 5GHz channel-width capabilities of the chip (for greying out width options). */
+    suspend fun getCapabilities(): ApCaps = withContext(Dispatchers.IO) {
+        val result = Shell.cmd("${Backend.startAp} caps 2>/dev/null").exec()
+        if (!result.isSuccess) return@withContext ApCaps()
+        val kv = mutableMapOf<String, String>()
+        result.out.forEach { line ->
+            val i = line.indexOf('=')
+            if (i > 0) kv[line.substring(0, i).trim()] = line.substring(i + 1).trim()
+        }
+        ApCaps(ht40 = kv["ht40"] == "1", vht = kv["vht"] == "1")
     }
 
     suspend fun getInterfaces(): List<NetworkIface> = withContext(Dispatchers.IO) {

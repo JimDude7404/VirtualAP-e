@@ -267,7 +267,8 @@ fun MainScreen(
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         onClick = {
-                                            vm.config = vm.config.copy(band = value, channel = "")
+                                            // Reset channel + width: valid options differ per band.
+                                            vm.selectBand(value)
                                             bandExpanded = false
                                         }
                                     )
@@ -309,8 +310,50 @@ fun MainScreen(
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         onClick = {
-                                            vm.config = vm.config.copy(channel = value)
+                                            // May clamp width to Auto if this channel is 20MHz-only.
+                                            vm.selectChannel(value)
                                             channelExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+
+                        // Width dropdown. Options unsupported by the current band /
+                        // chip are greyed out (2.4GHz is fixed to 20MHz; 40 needs
+                        // HT40, 80 needs VHT). The backend also downgrades safely.
+                        var widthExpanded by remember { mutableStateOf(false) }
+                        val widthOptions = listOf(
+                            autoLabel to "auto", "20 MHz" to "20",
+                            "40 MHz" to "40", "80 MHz" to "80"
+                        )
+                        val selectedWidthLabel = widthOptions.find { it.second == vm.config.width }?.first ?: autoLabel
+
+                        ExposedDropdownMenuBox(
+                            expanded = widthExpanded,
+                            onExpandedChange = { if (!status.running) widthExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedWidthLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.width_label)) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = widthExpanded) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                enabled = !status.running
+                            )
+                            ExposedDropdownMenu(
+                                expanded = widthExpanded,
+                                onDismissRequest = { widthExpanded = false }
+                            ) {
+                                widthOptions.forEach { (label, value) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        enabled = vm.widthEnabled(value),
+                                        onClick = {
+                                            vm.selectWidth(value)
+                                            widthExpanded = false
                                         }
                                     )
                                 }
@@ -682,6 +725,7 @@ private fun ActiveNetworkCard(vm: APViewModel) {
         else -> status.band ?: "—"
     }
     val channel = status.channel?.let { " · ch$it" } ?: ""
+    val width = status.width?.let { " · ${it}MHz" } ?: ""
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -760,7 +804,7 @@ private fun ActiveNetworkCard(vm: APViewModel) {
                     DashboardStatRow(
                         icon = Icons.Default.SignalCellularAlt,
                         label = stringResource(R.string.band_label),
-                        value = "$band$channel"
+                        value = "$band$channel$width"
                     )
                 }
                 Column(
