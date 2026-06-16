@@ -109,6 +109,10 @@ class PreferencesManager private constructor(context: Context) {
         get() = prefs.getString(Constants.KEY_AP_CONTAINER, "") ?: ""
         set(value) { prefs.edit().putString(Constants.KEY_AP_CONTAINER, value).apply() }
 
+    var apUsbTether: Boolean
+        get() = prefs.getBoolean(Constants.KEY_AP_USB_TETHER, false)
+        set(value) { prefs.edit().putBoolean(Constants.KEY_AP_USB_TETHER, value).apply() }
+
     var hasSeenRootCheck: Boolean
         get() = prefs.getBoolean(Constants.KEY_HAS_SEEN_ROOT_CHECK, false)
         set(value) { prefs.edit().putBoolean(Constants.KEY_HAS_SEEN_ROOT_CHECK, value).apply() }

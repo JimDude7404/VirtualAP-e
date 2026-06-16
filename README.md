@@ -27,6 +27,8 @@ VirtualAP is a software utility designed to configure a virtual access point on 
 * **Selectable Upstream Interface**: Direct traffic through Mobile Data, Wi-Fi, Ethernet, or virtual interfaces like WireGuard tun0 to tunnel all connected clients automatically.
 * **Wi-Fi Repeater Mode**: Connect your phone to any Wi-Fi network and share it as a hotspot simultaneously. The phone acts as a wireless repeater, allowing other devices to access the network without additional hardware.
 * **VPN Hotspot**: Set a VPN tunnel interface (such as WireGuard tun0) as the upstream. All devices connected to the hotspot are automatically routed through the VPN, turning your phone into a portable VPN access point.
+* **USB Tethering Support**: Concurrent USB tethering support alongside the Wi-Fi hotspot. Route any upstream (including Ethernet or VPN) to USB-connected clients.
+* **Ethernet to USB Tethering**: Use a USB-to-Ethernet adapter as the internet source and share it over USB tethering to a computer, effectively using the phone as a bridge.
 * **Managed Mode (Container-Routed Hotspot)**: Hand the hotspot's LAN to a running [Droidspaces](https://github.com/ravindu644/Droidspaces) container with `-K`. VirtualAP keeps only the wireless and Layer-2 plumbing while the container owns DHCP, DNS, NAT, and firewalling. A single OpenWrt container can therefore route the Wi-Fi hotspot and its Droidspaces gateway-mode containers at the same time, all from one LuCI control plane.
 * **Automatic Upstream Detection**: Reads the default network routing rules from the Android netd system to identify the active internet connection.
 * **DHCP and DNS Services**: Powered by dnsmasq to serve local clients.

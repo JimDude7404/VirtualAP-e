@@ -32,6 +32,7 @@ data class APConfig(
     val hidden: Boolean = false,
     val security: String = "wpa2",   // open | wpa2 | wpa2wpa3 | wpa3
     val pmf: Boolean = false,        // Protected Management Frames (wpa2 only)
+    val usbTether: Boolean = false,
     val containerMode: Boolean = false,
     val containerName: String = ""
 )
@@ -54,6 +55,7 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
             hidden = prefs.apHidden,
             security = prefs.apSecurity,
             pmf = prefs.apPmf,
+            usbTether = prefs.apUsbTether,
             containerMode = prefs.apContainerMode,
             containerName = prefs.apContainer
         )
@@ -93,6 +95,7 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.apHidden = cfg.hidden
                 prefs.apSecurity = cfg.security
                 prefs.apPmf = cfg.pmf
+                prefs.apUsbTether = cfg.usbTether
                 prefs.apContainerMode = cfg.containerMode
                 prefs.apContainer = cfg.containerName
             }
@@ -207,8 +210,8 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
 
     fun start() {
         val cfg = config
-        if (cfg.ssid.isBlank()) return
-        if (!passwordValid()) return
+        if (cfg.ssid.isBlank() && !cfg.usbTether) return
+        if (cfg.ssid.isNotBlank() && !passwordValid()) return
         if (cfg.containerMode && cfg.containerName.isBlank()) return
         viewModelScope.launch {
             isStarting = true
@@ -222,6 +225,7 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
                 cfg.gateway, cfg.dnsServers.takeIf { it.isNotBlank() },
                 cfg.hidden,
                 cfg.security, cfg.pmf,
+                cfg.usbTether,
                 if (cfg.containerMode) cfg.containerName else ""
             ) { level, msg ->
                 actionLogs.add(level to msg)

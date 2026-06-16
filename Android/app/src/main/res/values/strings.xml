@@ -56,6 +56,8 @@
     <string name="stopping">Stopping…</string>
     <string name="view_logs">View Logs</string>
     <string name="enter_ssid_prompt">Enter a network name to get started</string>
+    <string name="usb_tether_label">USB Tethering</string>
+    <string name="usb_tether_desc">Share internet via USB cable concurrently</string>
     <string name="active_network_title">Active Network</string>
     <string name="since_time">Since %s</string>
     <string name="gateway_label">Gateway</string>

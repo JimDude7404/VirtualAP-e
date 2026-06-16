@@ -26,6 +26,7 @@ object Constants {
     const val KEY_AP_PMF = "ap_pmf"
     const val KEY_AP_CONTAINER_MODE = "ap_container_mode"
     const val KEY_AP_CONTAINER = "ap_container"
+    const val KEY_AP_USB_TETHER = "ap_usb_tether"
     const val KEY_HAS_SEEN_ROOT_CHECK = "has_seen_root_check"
     const val KEY_PAYLOAD_VERSION = "payload_version"
 }

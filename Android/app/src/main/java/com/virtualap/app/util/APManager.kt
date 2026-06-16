@@ -17,6 +17,8 @@ data class APStatus(
     val channel: String? = null,
     val width: String? = null,          // actual channel width in MHz while running
     val security: String? = null,       // open | wpa2 | wpa2wpa3 | wpa3 while running
+    val usbTether: Boolean = false,
+    val usbIface: String? = null,
     val upstream: String? = null,
     val upstreamIface: String? = null,
     val upstreamTable: String? = null,
@@ -53,6 +55,8 @@ object APManager {
             channel = kv["channel"],
             width = kv["width"],
             security = kv["security"],
+            usbTether = kv["usb_tether"] == "1",
+            usbIface = kv["usb_iface"],
             upstream = kv["upstream"],
             upstreamIface = kv["upstream_iface"],
             upstreamTable = kv["upstream_table"],
@@ -66,6 +70,7 @@ object APManager {
         ssid: String, password: String, upstream: String,
         band: String, channel: String?, width: String, gateway: String, dnsServers: String?,
         hidden: Boolean = false, security: String = "wpa2", pmf: Boolean = false,
+        usbTether: Boolean = false,
         container: String = "",
         onLine: (Int, String) -> Unit
     ): Boolean = withContext(Dispatchers.IO) {
@@ -74,9 +79,10 @@ object APManager {
         val dnsVal = dnsServers ?: ""
         val hiddenVal = if (hidden) "1" else "0"
         val pmfVal = if (pmf) "1" else "0"
+        val usbVal = if (usbTether) "1" else "0"
         // -K is always passed (empty clears managed mode) so a stale CONTAINER
         // in ap.conf never silently re-enables it.
-        val cmd = "${Backend.startAp} start -s ${sq(ssid)} -p ${sq(password)} -o ${sq(upstream)} -b ${sq(band)} -c ${sq(channelVal)} -W ${sq(width)} -g ${sq(gateway)} -d ${sq(dnsVal)} -H $hiddenVal -A ${sq(security)} -M $pmfVal -K ${sq(container)}"
+        val cmd = "${Backend.startAp} start -s ${sq(ssid)} -p ${sq(password)} -o ${sq(upstream)} -b ${sq(band)} -c ${sq(channelVal)} -W ${sq(width)} -g ${sq(gateway)} -d ${sq(dnsVal)} -H $hiddenVal -A ${sq(security)} -M $pmfVal -T $usbVal -K ${sq(container)}"
 
         val outputList = object : com.topjohnwu.superuser.CallbackList<String>() {
             override fun onAddElement(e: String?) {

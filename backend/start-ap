@@ -58,6 +58,12 @@ HIDDEN="0"
 # (0/1); wpa2wpa3 forces 1 and wpa3 forces 2 per the standard.
 SECURITY="wpa2"
 PMF="0"
+USB_TETHER="0"
+USB_IFACE_RESOLVED=""
+USB_IP_GW="192.168.43.1"
+USB_IP_NET="192.168.43.0/24"
+USB_IP_BEGIN="192.168.43.10"
+USB_IP_END="192.168.43.50"
 
 # --- Droidspaces container integration (managed mode) ---
 # When CONTAINER is set: ap0 becomes a bridged port on VAP_BRIDGE, a veth peer
@@ -140,6 +146,7 @@ HIDDEN='$(sq "$HIDDEN")'
 SECURITY='$(sq "$SECURITY")'
 PMF='$(sq "$PMF")'
 CONTAINER='$(sq "$CONTAINER")'
+USB_TETHER='$(sq "$USB_TETHER")'
 EOF
 }
 
@@ -216,6 +223,44 @@ resolve_upstream() {
         log "Upstream: $UPSTREAM (table $UPSTREAM_TABLE)"
     fi
     return 0
+}
+
+# --- USB Tethering helpers ---
+
+detect_usb_iface() {
+    # Check for common Android USB tethering interface names
+    for iface in rndis0 usb0; do
+        if [ -d "/sys/class/net/$iface" ]; then
+            $ECHO "$iface"
+            return 0
+        fi
+    done
+    return 1
+}
+
+enable_usb_tethering() {
+    log "Enabling USB tethering..."
+    # Root-level command to enable RNDIS (USB tethering).
+    svc usb setFunctions rndis 2>/dev/null || setprop sys.usb.config rndis,adb
+
+    local i=0
+    while [ $i -lt 15 ]; do
+        USB_IFACE_RESOLVED=$(detect_usb_iface)
+        if [ -n "$USB_IFACE_RESOLVED" ]; then
+            log "USB tethering interface '$USB_IFACE_RESOLVED' detected."
+            return 0
+        fi
+        $SLEEP 1
+        i=$((i + 1))
+    done
+    error "USB tethering interface did not appear. Ensure a USB cable is connected."
+    return 1
+}
+
+disable_usb_tethering() {
+    log "Disabling USB tethering..."
+    # Reset to default (MTP or None)
+    svc usb setFunctions mtp 2>/dev/null || setprop sys.usb.config mtp,adb
 }
 
 # --- Wireless helpers (static iw) ---
@@ -423,6 +468,16 @@ teardown() {
     "$IPT" -D FORWARD -i "$AP_IFACE" -j ACCEPT 2>/dev/null || true
     "$IPT" -D FORWARD -o "$AP_IFACE" -j ACCEPT 2>/dev/null || true
 
+    # USB Tethering cleanup
+    local usb_iface; usb_iface=$($SED -n 's/^usb_iface=//p' "$STATE_FILE" 2>/dev/null)
+    if [ -n "$usb_iface" ]; then
+        "$IPT" -t nat -D POSTROUTING -s "$USB_IP_NET" ! -d "$USB_IP_NET" -j MASQUERADE 2>/dev/null || true
+        "$IPT" -D FORWARD -i "$usb_iface" -j ACCEPT 2>/dev/null || true
+        "$IPT" -D FORWARD -o "$usb_iface" -j ACCEPT 2>/dev/null || true
+        "$IP" addr flush dev "$usb_iface" 2>/dev/null || true
+        disable_usb_tethering
+    fi
+
     "$IP" route del "$IP_NET" dev "$AP_IFACE" table main 2>/dev/null || true
     "$IP" route del "$IP_NET" dev "$AP_IFACE" table "$ANDROID_LOCAL_NETWORK_TABLE" 2>/dev/null || true
 
@@ -459,13 +514,31 @@ create_ap_iface() {
 }
 
 config_network() {
-    create_ap_iface || return 1
+    local has_wifi=1
+    if [ -z "$SSID" ] && [ "$USB_TETHER" = "1" ]; then
+        has_wifi=0
+    fi
 
-    log "Configuring gateway address $IP_GW..."
-    "$IP" link set "$AP_IFACE" down 2>/dev/null
-    "$IP" addr flush dev "$AP_IFACE" 2>/dev/null
-    "$IP" addr add "$IP_GW/24" dev "$AP_IFACE" || { error "Failed to assign $IP_GW"; return 1; }
-    "$IP" link set "$AP_IFACE" up || { error "Failed to bring up $AP_IFACE"; return 1; }
+    if [ "$has_wifi" = "1" ]; then
+        create_ap_iface || return 1
+        log "Configuring gateway address $IP_GW..."
+        "$IP" link set "$AP_IFACE" down 2>/dev/null
+        "$IP" addr flush dev "$AP_IFACE" 2>/dev/null
+        "$IP" addr add "$IP_GW/24" dev "$AP_IFACE" || { error "Failed to assign $IP_GW"; return 1; }
+        "$IP" link set "$AP_IFACE" up || { error "Failed to bring up $AP_IFACE"; return 1; }
+    fi
+
+    if [ "$USB_TETHER" = "1" ]; then
+        if enable_usb_tethering; then
+            log "Configuring USB gateway $USB_IP_GW on $USB_IFACE_RESOLVED..."
+            "$IP" link set "$USB_IFACE_RESOLVED" down 2>/dev/null
+            "$IP" addr flush dev "$USB_IFACE_RESOLVED" 2>/dev/null
+            "$IP" addr add "$USB_IP_GW/24" dev "$USB_IFACE_RESOLVED" || warn "Failed to assign $USB_IP_GW to USB"
+            "$IP" link set "$USB_IFACE_RESOLVED" up || warn "Failed to bring up USB"
+        else
+            USB_TETHER="0"
+        fi
+    fi
 
     local prev_fwd
     prev_fwd=$($CAT /proc/sys/net/ipv4/ip_forward 2>/dev/null)
@@ -473,38 +546,51 @@ config_network() {
 
     log "Installing routes and policy rules..."
 
-    # Connected route in main ("replace" - restarts must not stack duplicates)
-    "$IP" route replace "$IP_NET" dev "$AP_IFACE" src "$IP_GW" proto static scope link table main \
-        || { error "Failed to add subnet route to main"; return 1; }
+    if [ "$has_wifi" = "1" ]; then
+        # Connected route in main ("replace" - restarts must not stack duplicates)
+        "$IP" route replace "$IP_NET" dev "$AP_IFACE" src "$IP_GW" proto static scope link table main \
+            || { error "Failed to add subnet route to main"; return 1; }
 
-    # Mirror route in local_network table (97) so container reply packets
-    # (src 172.28.0.0/16) reach VirtualAP clients via Droidspaces rule 6095.
-    "$IP" route replace "$IP_NET" dev "$AP_IFACE" src "$IP_GW" proto static scope link \
-        table "$ANDROID_LOCAL_NETWORK_TABLE" 2>/dev/null \
-        || warn "Could not add subnet route to local_network table ($ANDROID_LOCAL_NETWORK_TABLE) - port forwards from containers may not work"
+        # Mirror route in local_network table (97) so container reply packets
+        # (src 172.28.0.0/16) reach VirtualAP clients via Droidspaces rule 6095.
+        "$IP" route replace "$IP_NET" dev "$AP_IFACE" src "$IP_GW" proto static scope link \
+            table "$ANDROID_LOCAL_NETWORK_TABLE" 2>/dev/null \
+            || warn "Could not add subnet route to local_network table ($ANDROID_LOCAL_NETWORK_TABLE) - port forwards from containers may not work"
 
-    # Return path: replies/forwards TO the AP subnet resolve via main, above
-    # every netd rule (incl. VPN catch-alls)
-    "$IP" rule add from all to "$IP_NET" lookup main pref "$PRIO_TO_SUBNET" 2>/dev/null \
-        || warn "to-subnet rule already present"
+        # Return path: replies/forwards TO the AP subnet resolve via main, above
+        # every netd rule (incl. VPN catch-alls)
+        "$IP" rule add from all to "$IP_NET" lookup main pref "$PRIO_TO_SUBNET" 2>/dev/null \
+            || warn "to-subnet rule already present"
 
-    # Upstream steering: everything FROM the AP clients goes to the selected
-    # network's table
-    "$IP" rule add from all iif "$AP_IFACE" lookup "$UPSTREAM_TABLE" pref "$PRIO_FROM_AP" \
-        || { error "Failed to add upstream steering rule (table $UPSTREAM_TABLE)"; return 1; }
+        # Upstream steering: everything FROM the AP clients goes to the selected
+        # network's table
+        "$IP" rule add from all iif "$AP_IFACE" lookup "$UPSTREAM_TABLE" pref "$PRIO_FROM_AP" \
+            || { error "Failed to add upstream steering rule (table $UPSTREAM_TABLE)"; return 1; }
 
-    # Firewall: scope to ap0 only; interface-less MASQUERADE survives
-    # upstream changes (Docker/LXC style)
-    "$IPT" -I FORWARD 1 -i "$AP_IFACE" -j ACCEPT || { error "FORWARD -i insert failed"; return 1; }
-    "$IPT" -I FORWARD 1 -o "$AP_IFACE" -j ACCEPT || { error "FORWARD -o insert failed"; return 1; }
-    "$IPT" -t nat -I POSTROUTING 1 -s "$IP_NET" ! -d "$IP_NET" -j MASQUERADE \
-        || { error "MASQUERADE insert failed"; return 1; }
+        # Firewall: scope to ap0 only; interface-less MASQUERADE survives
+        # upstream changes (Docker/LXC style)
+        "$IPT" -I FORWARD 1 -i "$AP_IFACE" -j ACCEPT || { error "FORWARD -i insert failed"; return 1; }
+        "$IPT" -I FORWARD 1 -o "$AP_IFACE" -j ACCEPT || { error "FORWARD -o insert failed"; return 1; }
+        "$IPT" -t nat -I POSTROUTING 1 -s "$IP_NET" ! -d "$IP_NET" -j MASQUERADE \
+            || { error "MASQUERADE insert failed"; return 1; }
+    fi
+
+    if [ "$USB_TETHER" = "1" ]; then
+        "$IP" rule add from all iif "$USB_IFACE_RESOLVED" lookup "$UPSTREAM_TABLE" pref "$PRIO_FROM_AP" \
+            || warn "Failed to add USB steering rule"
+        "$IPT" -I FORWARD 1 -i "$USB_IFACE_RESOLVED" -j ACCEPT || warn "USB FORWARD -i failed"
+        "$IPT" -I FORWARD 1 -o "$USB_IFACE_RESOLVED" -j ACCEPT || warn "USB FORWARD -o failed"
+        "$IPT" -t nat -I POSTROUTING 1 -s "$USB_IP_NET" ! -d "$USB_IP_NET" -j MASQUERADE \
+            || warn "USB MASQUERADE failed"
+    fi
 
     # Record state for exact teardown + status
     $CAT > "$STATE_FILE" <<EOF
 upstream=$UPSTREAM
 upstream_table=$UPSTREAM_TABLE
 upstream_iface=$UPSTREAM_IFACE_RESOLVED
+usb_tether=$USB_TETHER
+usb_iface=$USB_IFACE_RESOLVED
 band=$BAND
 channel=$CHANNEL
 ssid=$SSID
@@ -662,12 +748,24 @@ server=$clean_dns"
         dns_config="resolv-file=$RUN_DIR/resolv.conf"
     fi
 
+    local interfaces_dnsmasq="interface=$AP_IFACE"
+    local listen_dnsmasq="listen-address=$IP_GW"
+    local dhcp_ranges="dhcp-range=$IP_BEGIN,$IP_END,12h"
+    if [ "$USB_TETHER" = "1" ]; then
+        interfaces_dnsmasq="$interfaces_dnsmasq
+interface=$USB_IFACE_RESOLVED"
+        listen_dnsmasq="$listen_dnsmasq
+listen-address=$USB_IP_GW"
+        dhcp_ranges="$dhcp_ranges
+dhcp-range=$USB_IP_BEGIN,$USB_IP_END,12h"
+    fi
+
     $CAT > "$RUN_DIR/dnsmasq.conf" <<EOF
-interface=$AP_IFACE
+$interfaces_dnsmasq
 bind-interfaces
 except-interface=lo
-listen-address=$IP_GW
-dhcp-range=$IP_BEGIN,$IP_END,12h
+$listen_dnsmasq
+$dhcp_ranges
 dhcp-option=option:router,$IP_GW
 dhcp-option=option:dns-server,$IP_GW
 dhcp-leasefile=$RUN_DIR/dnsmasq.leases
@@ -679,7 +777,9 @@ log-facility=$DNSMASQ_LOG
 log-dhcp
 EOF
 
-    start_hostapd "" || return 1
+    if [ -n "$SSID" ]; then
+        start_hostapd "" || return 1
+    fi
 
     log "Starting dnsmasq..."
     : > "$DNSMASQ_LOG" 2>/dev/null
@@ -851,37 +951,41 @@ teardown_bridged() {
 # --- Subcommands ---
 
 cmd_start() {
-    [ -z "$SSID" ] && { error "SSID not set (use -s or save a config first)"; exit 1; }
-    # Open networks carry no passphrase; WPA modes use a WPA-PSK/SAE passphrase,
-    # which the standard (and hostapd) bound to 8-63 characters.
-    if [ "$SECURITY" != "open" ]; then
-        plen=$($PRINTF %s "$PASSWORD" | $WC -c)
-        if [ "$plen" -lt 8 ] || [ "$plen" -gt 63 ]; then
-            error "Password must be 8-63 characters."; exit 1
+    if [ -n "$SSID" ]; then
+        # Open networks carry no passphrase; WPA modes use a WPA-PSK/SAE passphrase,
+        # which the standard (and hostapd) bound to 8-63 characters.
+        if [ "$SECURITY" != "open" ]; then
+            plen=$($PRINTF %s "$PASSWORD" | $WC -c)
+            if [ "$plen" -lt 8 ] || [ "$plen" -gt 63 ]; then
+                error "Password must be 8-63 characters."; exit 1
+            fi
         fi
-    fi
 
-    # Validate channel compatibility with selected band
-    if [ -n "$CHANNEL" ]; then
-        case "$CHANNEL" in
-            *[!0-9]*)
-                warn "Channel '$CHANNEL' is not a valid number. Resetting to auto."
-                CHANNEL=""
-                ;;
-            *)
-                if [ "$BAND" = "5" ]; then
-                    if [ "$CHANNEL" -lt 36 ]; then
-                        warn "Channel $CHANNEL is invalid for 5GHz band. Resetting to auto."
-                        CHANNEL=""
+        # Validate channel compatibility with selected band
+        if [ -n "$CHANNEL" ]; then
+            case "$CHANNEL" in
+                *[!0-9]*)
+                    warn "Channel '$CHANNEL' is not a valid number. Resetting to auto."
+                    CHANNEL=""
+                    ;;
+                *)
+                    if [ "$BAND" = "5" ]; then
+                        if [ "$CHANNEL" -lt 36 ]; then
+                            warn "Channel $CHANNEL is invalid for 5GHz band. Resetting to auto."
+                            CHANNEL=""
+                        fi
+                    else
+                        if [ "$CHANNEL" -lt 1 ] || [ "$CHANNEL" -gt 14 ]; then
+                            warn "Channel $CHANNEL is invalid for 2.4GHz band. Resetting to auto."
+                            CHANNEL=""
+                        fi
                     fi
-                else
-                    if [ "$CHANNEL" -lt 1 ] || [ "$CHANNEL" -gt 14 ]; then
-                        warn "Channel $CHANNEL is invalid for 2.4GHz band. Resetting to auto."
-                        CHANNEL=""
-                    fi
-                fi
-                ;;
-        esac
+                    ;;
+            esac
+        fi
+    elif [ "$USB_TETHER" = "0" ]; then
+        error "SSID not set and USB tethering not enabled. Nothing to do."
+        exit 1
     fi
 
     # Persist settings now, before pick_channel mutates BAND/CHANNEL and
@@ -918,15 +1022,16 @@ cmd_start() {
     else
         # --- Routed mode: classic VirtualAP L3 ---
         resolve_upstream || exit 1
-        pick_channel
-        pick_width
+        [ -n "$SSID" ] && pick_channel
+        [ -n "$SSID" ] && pick_width
         trap 'full_stop; exit 1' INT TERM
 
         if ! config_network; then full_stop; exit 1; fi
         if ! start_services; then full_stop; exit 1; fi
 
         log "VirtualAP is ACTIVE!"
-        log "  SSID    : $SSID (${BAND}GHz, channel $CHANNEL, ${EFFECTIVE_WIDTH}MHz)"
+        [ -n "$SSID" ] && log "  SSID    : $SSID (${BAND}GHz, channel $CHANNEL, ${EFFECTIVE_WIDTH}MHz)"
+        [ "$USB_TETHER" = "1" ] && log "  USB     : $USB_IFACE_RESOLVED ($USB_IP_GW)"
         log "  Gateway : $IP_GW (static - never changes)"
         log "  Upstream: ${UPSTREAM_IFACE_RESOLVED:-$UPSTREAM} (table $UPSTREAM_TABLE)"
     fi
@@ -961,6 +1066,7 @@ cmd_status() {
             [ -f "$RUN_DIR/dnsmasq.pid" ] && $KILL -0 "$($CAT "$RUN_DIR/dnsmasq.pid")" 2>/dev/null && dnsmasq_state="running"
         fi
         [ "$hostapd_state" = "running" ] && running=1
+        [ "$dnsmasq_state" = "running" ] && running=1
         clients=$("$IW" dev "$AP_IFACE" station dump 2>/dev/null | $GREP -c '^Station')
     fi
 
@@ -984,7 +1090,7 @@ cmd_status() {
     fi
     # gateway/ssid/etc. come from the state file (routed: IP_GW; bridged: VAP_LAN_GW)
     if [ -f "$STATE_FILE" ]; then
-        $GREP -E '^(ssid|band|channel|upstream|upstream_table|upstream_iface|gateway|dns_servers|container|started)=' "$STATE_FILE"
+        $GREP -E '^(ssid|band|channel|upstream|upstream_table|upstream_iface|gateway|dns_servers|container|started|usb_tether|usb_iface)=' "$STATE_FILE"
     else
         $ECHO "gateway=$IP_GW"
     fi
@@ -1051,6 +1157,7 @@ print_usage() {
     $ECHO "  -A <mode>      Security: open, wpa2 (default), wpa2wpa3, wpa3"
     $ECHO "  -M <0|1>       Protected Management Frames for wpa2 (0=off [default],"
     $ECHO "                 1=on); forced on for wpa2wpa3, required for wpa3"
+    $ECHO "  -T <0|1>       Enable USB tethering (default: 0)"
     $ECHO "  -K <container> Managed mode: hand the AP's LAN to a Droidspaces"
     $ECHO "                 container (it owns DHCP/DNS/NAT). Disables -o/-g/-d."
     $ECHO ""
@@ -1063,7 +1170,7 @@ COMMAND="$1"
 # Saved config provides defaults; CLI flags override
 load_conf
 
-while getopts "s:p:o:b:c:W:w:g:d:H:A:M:K:h" opt 2>/dev/null; do
+while getopts "s:p:o:b:c:W:w:g:d:H:A:M:T:K:h" opt 2>/dev/null; do
     case $opt in
         s) SSID="$OPTARG" ;;
         p) PASSWORD="$OPTARG" ;;
@@ -1077,6 +1184,7 @@ while getopts "s:p:o:b:c:W:w:g:d:H:A:M:K:h" opt 2>/dev/null; do
         H) HIDDEN="$OPTARG" ;;
         A) SECURITY="$OPTARG" ;;
         M) PMF="$OPTARG" ;;
+        T) USB_TETHER="$OPTARG" ;;
         K) CONTAINER="$OPTARG" ;;
         h) print_usage; exit 0 ;;
         *) print_usage; exit 1 ;;

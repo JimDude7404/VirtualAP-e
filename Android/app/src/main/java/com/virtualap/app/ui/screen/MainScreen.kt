@@ -417,6 +417,17 @@ fun MainScreen(
                                 }
                             }
                         }
+                        Spacer(Modifier.height(12.dp))
+
+                        // USB Tethering Toggle
+                        SwitchItem(
+                            label = stringResource(R.string.usb_tether_label),
+                            subtitle = stringResource(R.string.usb_tether_desc),
+                            icon = Icons.Default.Usb,
+                            checked = vm.config.usbTether,
+                            onCheckedChange = { vm.config = vm.config.copy(usbTether = it) },
+                            enabled = !status.running
+                        )
                     }
                 }
             }
@@ -560,6 +571,17 @@ fun MainScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                         }
+                        Spacer(Modifier.height(12.dp))
+
+                        // USB Tethering Toggle
+                        SwitchItem(
+                            label = stringResource(R.string.usb_tether_label),
+                            subtitle = stringResource(R.string.usb_tether_desc),
+                            icon = Icons.Default.Usb,
+                            checked = vm.config.usbTether,
+                            onCheckedChange = { vm.config = vm.config.copy(usbTether = it) },
+                            enabled = !status.running
+                        )
                     }
                 }
             }
@@ -674,6 +696,17 @@ fun MainScreen(
                                 enabled = !status.running
                             )
                         }
+                        Spacer(Modifier.height(12.dp))
+
+                        // USB Tethering Toggle
+                        SwitchItem(
+                            label = stringResource(R.string.usb_tether_label),
+                            subtitle = stringResource(R.string.usb_tether_desc),
+                            icon = Icons.Default.Usb,
+                            checked = vm.config.usbTether,
+                            onCheckedChange = { vm.config = vm.config.copy(usbTether = it) },
+                            enabled = !status.running
+                        )
                     }
                 }
             }
@@ -686,7 +719,7 @@ fun MainScreen(
                     Button(
                         onClick = { if (status.running) vm.stop() else vm.start() },
                         modifier = Modifier.fillMaxWidth().height(52.dp),
-                        enabled = !isLoading && (status.running || (vm.config.ssid.isNotBlank() && vm.passwordValid() && (!vm.config.containerMode || vm.config.containerName.isNotBlank()))),
+                        enabled = !isLoading && (status.running || ((vm.config.ssid.isNotBlank() || vm.config.usbTether) && (vm.config.ssid.isBlank() || vm.passwordValid()) && (!vm.config.containerMode || vm.config.containerName.isNotBlank()))),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (status.running)
                                 MaterialTheme.colorScheme.error
@@ -750,7 +783,7 @@ fun MainScreen(
                         )
                     }
 
-                    if (vm.config.ssid.isBlank() && !status.running) {
+                    if (vm.config.ssid.isBlank() && !vm.config.usbTether && !status.running) {
                         Spacer(Modifier.height(4.dp))
                         Text(
                             stringResource(R.string.enter_ssid_prompt),
@@ -879,6 +912,13 @@ private fun ActiveNetworkCard(vm: APViewModel) {
                         label = stringResource(R.string.band_label),
                         value = "$band$channel$width"
                     )
+                    if (status.usbTether) {
+                        DashboardStatRow(
+                            icon = Icons.Default.Usb,
+                            label = stringResource(R.string.usb_tether_label),
+                            value = status.usbIface ?: stringResource(R.string.status_running)
+                        )
+                    }
                 }
                 Column(
                     modifier = Modifier.weight(1f),
