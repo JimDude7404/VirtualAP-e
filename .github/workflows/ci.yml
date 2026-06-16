@@ -23,14 +23,15 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up QEMU (arm64 emulation)
+    - name: Set up QEMU (arm64 + arm emulation)
       uses: docker/setup-qemu-action@v3
       with:
-        platforms: arm64
+        platforms: arm64,arm
 
     - name: Build static binaries from source
-      # Compiles hostapd/iw/dnsmasq (+ busybox) in an aarch64 Alpine container
-      # from the externals/ submodules and stages them into backend/bin.
+      # Compiles hostapd/iw/dnsmasq (+ busybox) in aarch64 and armhf Alpine
+      # containers from the externals/ submodules and stages them into
+      # backend/{aarch64,armhf}.
       run: |
         chmod +x scripts/build-static.sh scripts/build-in-container.sh
         ./scripts/build-static.sh

@@ -1,9 +1,11 @@
 out/
 scripts/.src-cache/
 # Binaries are built from the externals/ submodules by scripts/build-static.sh
-# (in CI on every run), never committed. Keep the dir via .gitkeep.
-backend/bin/*
-!backend/bin/.gitkeep
+# (in CI on every run), never committed. Keep the per-arch dirs via .gitkeep.
+backend/aarch64/*
+!backend/aarch64/.gitkeep
+backend/armhf/*
+!backend/armhf/.gitkeep
 .DS_Store
 Android/.gradle/
 Android/app/build/

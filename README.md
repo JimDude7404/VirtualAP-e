@@ -31,16 +31,16 @@ VirtualAP is a software utility designed to configure a virtual access point on 
 * **Automatic Upstream Detection**: Reads the default network routing rules from the Android netd system to identify the active internet connection.
 * **DHCP and DNS Services**: Powered by dnsmasq to serve local clients.
 * **Same-Channel Concurrency**: The access point dynamically follows the Wi-Fi station channel. This addresses stability issues with 5GHz connectivity.
-* **Minimal Footprint**: Ships `hostapd`, `dnsmasq`, `iw`, and `busybox` as fully-static aarch64 binaries that run directly on Android — no chroot, no namespaces. Firewall and routing tasks leverage the native Android iptables and ip tools.
+* **Minimal Footprint**: Ships `hostapd`, `dnsmasq`, `iw`, and `busybox` as fully-static ARM binaries (both 64-bit `aarch64` and 32-bit `armhf`) that run directly on Android — no chroot, no namespaces. Firewall and routing tasks leverage the native Android iptables and ip tools.
 
 ## Repository Layout
 
 ```
 VirtualAP/
 ├── Android/           ← Companion application (Root validation, installer, AP control)
-├── backend/           ← start-ap (AP engine); bin/ is populated by the build (gitignored)
+├── backend/           ← start-ap (AP engine); {aarch64,armhf}/ populated by the build (gitignored)
 ├── externals/         ← Vendored source submodules: hostapd, iw, dnsmasq (our own forks)
-└── scripts/           ← Docker-based builder for the static aarch64 binaries
+└── scripts/           ← Docker-based builder for the static aarch64 + armhf binaries
 ```
 
 The wireless tools are compiled from source on every build — no binaries are committed. The sources are vendored as git submodules under `externals/` (forks of [hostap](https://github.com/Droidspaces/hostapd-vap), [iw](https://github.com/Droidspaces/iw-vap), and [dnsmasq](https://github.com/Droidspaces/dnsmasq-vap)), so the build survives upstream disappearing. GitHub CI rebuilds everything from scratch on each run.
@@ -48,18 +48,18 @@ The wireless tools are compiled from source on every build — no binaries are c
 ## Build Instructions
 
 ### 1. Build the static binaries
-The build runs in an emulated aarch64 Alpine container, so it only requires Docker. It initializes the `externals/` submodules, compiles `hostapd`, `hostapd_cli`, `iw`, and `dnsmasq`, stages `busybox`, and copies all of them into `backend/bin/`:
+The build runs in emulated Alpine containers (one per architecture), so it only requires Docker. It initializes the `externals/` submodules, then for **both 64-bit (`aarch64`) and 32-bit (`armhf`) ARM** it compiles `hostapd`, `hostapd_cli`, `iw`, and `dnsmasq`, stages `busybox`, and copies all of them into `backend/aarch64/` and `backend/armhf/` respectively:
 ```bash
 ./scripts/build-static.sh
 ```
-(If you cloned without `--recursive`, the script runs `git submodule update --init` for you.)
+(If you cloned without `--recursive`, the script runs `git submodule update --init` for you. The first run registers QEMU binfmt handlers for both ARM targets.)
 
 ### 2. Build the Android APK
 Compile the Android application using Gradle:
 ```bash
 cd Android && ./gradlew assembleRelease
 ```
-The Gradle `prepareAssets` task executes automatically before compilation to copy `backend/start-ap` and every binary under `backend/bin/` into the application assets, alongside a `PAYLOAD_VERSION` marker (a hash of the binaries) used to detect updates.
+The Gradle `prepareAssets` task executes automatically before compilation to copy `backend/start-ap` and every per-arch binary under `backend/{aarch64,armhf}/` into the application assets (`assets/bin/<arch>/`), each alongside a `PAYLOAD_VERSION` marker (a hash of that arch's binaries) used to detect updates. The same APK installs on both 64-bit and 32-bit ARM phones; at install time the app deploys only the binaries matching the device's architecture.
 
 ## Android Application Lifecycle
 

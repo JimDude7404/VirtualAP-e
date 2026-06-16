@@ -25,11 +25,13 @@ data class APConfig(
     val password: String = "",
     val band: String = "2",
     val channel: String = "",
-    val width: String = "20",
+    val width: String = "auto",
     val upstream: String = "auto",
     val gateway: String = "192.168.42.1",
     val dnsServers: String = "",
     val hidden: Boolean = false,
+    val security: String = "wpa2",   // open | wpa2 | wpa2wpa3 | wpa3
+    val pmf: Boolean = false,        // Protected Management Frames (wpa2 only)
     val containerMode: Boolean = false,
     val containerName: String = ""
 )
@@ -50,6 +52,8 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
             gateway = prefs.apGateway,
             dnsServers = prefs.apDnsServers,
             hidden = prefs.apHidden,
+            security = prefs.apSecurity,
+            pmf = prefs.apPmf,
             containerMode = prefs.apContainerMode,
             containerName = prefs.apContainer
         )
@@ -87,6 +91,8 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
                 prefs.apGateway = cfg.gateway
                 prefs.apDnsServers = cfg.dnsServers
                 prefs.apHidden = cfg.hidden
+                prefs.apSecurity = cfg.security
+                prefs.apPmf = cfg.pmf
                 prefs.apContainerMode = cfg.containerMode
                 prefs.apContainer = cfg.containerName
             }
@@ -164,6 +170,35 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { applyInterfaceList(APManager.getInterfaces()) }
     }
 
+    /** Switch band: valid channels differ per band, so reset to Auto. Width is
+     *  left to the user; the backend downgrades any unsupported width safely. */
+    fun selectBand(value: String) {
+        config = config.copy(band = value, channel = "")
+    }
+
+    fun selectChannel(value: String) {
+        config = config.copy(channel = value)
+    }
+
+    fun selectWidth(value: String) {
+        config = config.copy(width = value)
+    }
+
+    fun selectSecurity(value: String) {
+        config = config.copy(security = value)
+    }
+
+    fun setPmf(value: Boolean) {
+        config = config.copy(pmf = value)
+    }
+
+    /** Open networks have no passphrase field; WPA modes show one. */
+    fun passwordRequired(): Boolean = config.security != "open"
+
+    /** Open needs no passphrase; WPA (WPA-PSK/SAE) passphrases are 8-63 chars. */
+    fun passwordValid(): Boolean =
+        config.security == "open" || config.password.length in 8..63
+
     private fun refreshLog() {
         viewModelScope.launch {
             logText = APManager.readLog()
@@ -172,7 +207,8 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
 
     fun start() {
         val cfg = config
-        if (cfg.ssid.isBlank() || cfg.password.length < 8) return
+        if (cfg.ssid.isBlank()) return
+        if (!passwordValid()) return
         if (cfg.containerMode && cfg.containerName.isBlank()) return
         viewModelScope.launch {
             isStarting = true
@@ -185,6 +221,7 @@ class APViewModel(application: Application) : AndroidViewModel(application) {
                 cfg.width,
                 cfg.gateway, cfg.dnsServers.takeIf { it.isNotBlank() },
                 cfg.hidden,
+                cfg.security, cfg.pmf,
                 if (cfg.containerMode) cfg.containerName else ""
             ) { level, msg ->
                 actionLogs.add(level to msg)

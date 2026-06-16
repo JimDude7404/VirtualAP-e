@@ -14,8 +14,29 @@
 # Output -> /work/out, build scratch -> /work/.src-cache
 set -e
 
-OUT=/work/out
-SRC=/work/.src-cache
+# Arch label drives the per-arch output subdir. build-static.sh passes it via
+# $ARCH_LABEL (authoritative - it knows the requested --platform). Fall back to
+# `uname -m` only for standalone/manual runs; uname is unreliable under emulation.
+if [ -z "${ARCH_LABEL:-}" ]; then
+    case "$(uname -m)" in
+        aarch64)                 ARCH_LABEL=aarch64 ;;
+        armv7l|armv7|armhf|arm)  ARCH_LABEL=armhf ;;
+        *) echo "unsupported build arch: $(uname -m)"; exit 1 ;;
+    esac
+fi
+echo "### Target arch: $ARCH_LABEL (uname -m: $(uname -m))"
+
+# Sanity-check: the toolchain's actual word size must match the requested arch,
+# so a wrong-platform container (stale image cache) fails loudly instead of
+# silently producing mislabeled binaries.
+case "$ARCH_LABEL:$(uname -m)" in
+    aarch64:aarch64) ;;
+    armhf:armv7l|armhf:armv7|armhf:armhf|armhf:arm) ;;
+    *) echo "ERROR: ARCH_LABEL=$ARCH_LABEL but container is $(uname -m) - wrong-platform image?"; exit 1 ;;
+esac
+
+OUT="/work/out/$ARCH_LABEL"
+SRC="/work/.src-cache/$ARCH_LABEL"
 mkdir -p "$OUT" "$SRC"
 
 # Fully static, no PIE: a plain -static link on Alpine yields a static-PIE that
@@ -47,13 +68,27 @@ strip "$OUT/busybox" 2>/dev/null || true
 echo "### Building hostapd"
 vendor hostapd
 cd "$SRC/hostapd/hostapd"
-cat > .config <<EOF
+# Assert the fork wires no_pri_sec_switch into the config parser. start-ap emits
+# no_pri_sec_switch=1 for HT40/VHT to skip the OBSS coexistence scan, which
+# FullMAC chips (Broadcom brcmfmac on the Galaxy S10) abort with -95. Stock
+# hostapd has the struct field but no parser line, so an unpatched submodule
+# would silently reject the option and crash on 40/80MHz. (See externals/hostapd.)
+grep -q 'no_pri_sec_switch' config_file.c || {
+    echo "hostapd source is missing the no_pri_sec_switch config patch - check externals/hostapd"; exit 1; }
+cat > .config <<'EOF'
 CONFIG_DRIVER_NL80211=y
 CONFIG_LIBNL32=y
 CONFIG_IEEE80211N=y
 CONFIG_IEEE80211AC=y
 CONFIG_IEEE80211AX=y
 CONFIG_ACS=y
+# WPA3-Personal (SAE) + WPA2/WPA3 transition mode. Without this, hostapd rejects
+# wpa_key_mgmt=SAE at runtime (only WPA-PSK/WPA2 is understood).
+CONFIG_SAE=y
+# Enables the -f logfile flag so hostapd writes its output to a file. Without
+# this, -f is a silent no-op and logs/hostapd.log stays empty. Needed because
+# hostapd daemonizes with -B and its output would otherwise be lost.
+CONFIG_DEBUG_FILE=y
 EOF
 make clean >/dev/null 2>&1 || true
 # PKG_CONFIG --static pulls libnl-3/libnl-genl-3 + libcrypto static deps.

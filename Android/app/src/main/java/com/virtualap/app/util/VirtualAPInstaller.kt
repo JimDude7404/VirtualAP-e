@@ -1,6 +1,7 @@
 package com.virtualap.app.util
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
@@ -10,29 +11,45 @@ import java.io.File
 /**
  * Deploys the static AP-stack binaries (hostapd/hostapd_cli/iw/dnsmasq/busybox)
  * to /data/local/virtualap/bin. No chroot, no rootfs extraction - every binary
- * is a fully-static aarch64 ELF that runs directly on Android.
+ * is a fully-static ELF (aarch64 or armhf) that runs directly on Android.
  *
- * The bundled payload carries a version marker (assets/bin/PAYLOAD_VERSION, a
- * hash of the binaries written by the prepareAssets gradle task). When the
- * installed APK ships a different marker than the one last deployed, the setup
- * flow re-runs - this is the whole "update backend" mechanism. Scripts run from
- * the app files dir and can never go stale (see Backend).
+ * The APK bundles both arches under assets/bin/<arch>/; install() picks the one
+ * matching the device (see [deviceArch]) and deploys only that. Each arch dir
+ * carries a version marker (assets/bin/<arch>/PAYLOAD_VERSION, a hash of the
+ * binaries written by the prepareAssets gradle task). When the installed APK
+ * ships a different marker than the one last deployed, the setup flow re-runs -
+ * this is the whole "update backend" mechanism. Scripts run from the app files
+ * dir and can never go stale (see Backend).
  */
 object VirtualAPInstaller {
 
     /** Marker asset whose content changes whenever the binaries change. */
     private const val VERSION_MARKER = "PAYLOAD_VERSION"
 
-    /** Payload-version hash shipped in the installed APK, or null if missing. */
+    /**
+     * The asset arch dir for this device. We only ship 64-bit ARM (aarch64) and
+     * 32-bit ARM (armhf); anything else falls back to aarch64 (the common case).
+     */
+    fun deviceArch(): String {
+        val abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
+        return when {
+            abi.contains("arm64") || abi.contains("aarch64") -> "aarch64"
+            abi.contains("armeabi") || abi.contains("arm") -> "armhf"
+            else -> "aarch64"
+        }
+    }
+
+    /** Payload-version hash shipped in the installed APK for this arch, or null. */
     fun bundledPayloadVersion(context: Context): String? =
         runCatching {
-            context.assets.open("bin/$VERSION_MARKER").bufferedReader().use { it.readText().trim() }
+            context.assets.open("bin/${deviceArch()}/$VERSION_MARKER")
+                .bufferedReader().use { it.readText().trim() }
         }.getOrNull().takeUnless { it.isNullOrBlank() }
 
-    /** Binary names shipped under assets/bin (everything except the marker). */
+    /** Binary names shipped under assets/bin/<arch> (everything except the marker). */
     private fun bundledBinaries(context: Context): List<String> =
         runCatching {
-            context.assets.list("bin")?.filter { it != VERSION_MARKER } ?: emptyList()
+            context.assets.list("bin/${deviceArch()}")?.filter { it != VERSION_MARKER } ?: emptyList()
         }.getOrDefault(emptyList())
 
     /**
@@ -67,15 +84,17 @@ object VirtualAPInstaller {
                 "rm -rf ${Constants.VAP_DIR}/rootfs"
             ).exec()
 
-            // Step 2: Deploy the static binaries.
+            // Step 2: Deploy the static binaries for this device's arch.
+            val arch = deviceArch()
             val binaries = bundledBinaries(context)
             if (binaries.isEmpty())
                 return@withContext Result.failure(
-                    Exception("No binaries found in assets/bin/. Run scripts/build-static.sh and rebuild the APK.")
+                    Exception("No binaries found in assets/bin/$arch/. Run scripts/build-static.sh and rebuild the APK.")
                 )
+            onProgress(Log.INFO, "Installing $arch binaries...")
             for (name in binaries) {
                 onProgress(Log.INFO, "Installing $name...")
-                deployAsset(context, "bin/$name", "${Constants.VAP_DIR}/bin/$name", cacheDir)
+                deployAsset(context, "bin/$arch/$name", "${Constants.VAP_DIR}/bin/$name", cacheDir)
                     ?.let { return@withContext Result.failure(it) }
             }
             Shell.cmd("chmod 755 ${Constants.VAP_DIR}/bin/*").exec()

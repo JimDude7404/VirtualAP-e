@@ -47,9 +47,10 @@ android {
         vectorDrawables {
             useSupportLibrary = true
         }
-        ndk {
-            abiFilters += listOf("arm64-v8a")
-        }
+        // No native libs are bundled in the APK - the AP-stack binaries ship as
+        // assets (assets/bin/<arch>/) and are deployed at runtime for the device's
+        // arch. So no abiFilters: the same APK installs on both arm64-v8a and
+        // armeabi-v7a phones.
     }
 
     signingConfigs {
@@ -171,8 +172,10 @@ android {
 
 // ---------------------------------------------------------------------------
 // prepareAssets: stages the backend script and the static AP-stack binaries
-// into the assets directory, plus a PAYLOAD_VERSION marker (a hash of the
-// binaries) that lets the app detect when an APK update ships new binaries.
+// into the assets directory. Binaries are staged per-arch under
+// assets/bin/<arch>/ (aarch64, armhf), each with its own PAYLOAD_VERSION marker
+// (a hash of that arch's binaries) so the app can detect when an APK update
+// ships new binaries. The app deploys only the arch matching the device.
 // ---------------------------------------------------------------------------
 tasks.register("prepareAssets") {
     doLast {
@@ -192,27 +195,38 @@ tasks.register("prepareAssets") {
         startAp.copyTo(File(assetTools, "start-ap"), overwrite = true)
         println("prepareAssets: copied start-ap")
 
-        // Copy the static binaries (busybox + hostapd/hostapd_cli/iw/dnsmasq).
-        // Skip dotfiles like .gitkeep - only real binaries ship.
-        val binSrc = File(toolsSrc, "bin")
-        val binaries = binSrc.listFiles()
-            ?.filter { it.isFile && !it.name.startsWith(".") }
-            ?.sortedBy { it.name } ?: emptyList()
-        require(binaries.isNotEmpty()) {
-            "prepareAssets: no binaries in ${binSrc.absolutePath}. Run scripts/build-static.sh first."
+        // Copy the static binaries (busybox + hostapd/hostapd_cli/iw/dnsmasq)
+        // for each supported arch. Skip dotfiles like .gitkeep - only real
+        // binaries ship.
+        val arches = listOf("aarch64", "armhf")
+        var staged = 0
+        for (arch in arches) {
+            val binSrc = File(toolsSrc, arch)
+            val binaries = binSrc.listFiles()
+                ?.filter { it.isFile && !it.name.startsWith(".") }
+                ?.sortedBy { it.name } ?: emptyList()
+            if (binaries.isEmpty()) {
+                println("prepareAssets: WARNING no binaries in ${binSrc.absolutePath} - skipping $arch")
+                continue
+            }
+            val archDir = File(assetBin, arch).apply { mkdirs() }
+            val digest = MessageDigest.getInstance("SHA-256")
+            for (bin in binaries) {
+                bin.copyTo(File(archDir, bin.name), overwrite = true)
+                digest.update(bin.name.toByteArray())
+                digest.update(bin.readBytes())
+                println("prepareAssets: copied $arch/${bin.name}")
+            }
+            // Marker = hash of every binary, so it changes iff the binaries change.
+            val marker = digest.digest().joinToString("") { "%02x".format(it) }
+            File(archDir, "PAYLOAD_VERSION").writeText(marker)
+            println("prepareAssets: $arch payload version $marker")
+            staged++
         }
-        val digest = MessageDigest.getInstance("SHA-256")
-        for (bin in binaries) {
-            bin.copyTo(File(assetBin, bin.name), overwrite = true)
-            digest.update(bin.name.toByteArray())
-            digest.update(bin.readBytes())
-            println("prepareAssets: copied ${bin.name}")
+        require(staged > 0) {
+            "prepareAssets: no binaries staged for any arch under ${toolsSrc.absolutePath}. " +
+                "Run scripts/build-static.sh first."
         }
-
-        // Marker = hash of every binary, so it changes iff the binaries change.
-        val marker = digest.digest().joinToString("") { "%02x".format(it) }
-        File(assetBin, "PAYLOAD_VERSION").writeText(marker)
-        println("prepareAssets: payload version $marker")
     }
 }
 

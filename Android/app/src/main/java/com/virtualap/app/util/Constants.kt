@@ -22,6 +22,8 @@ object Constants {
     const val KEY_AP_GATEWAY = "ap_gateway"
     const val KEY_AP_DNS = "ap_dns"
     const val KEY_AP_HIDDEN = "ap_hidden"
+    const val KEY_AP_SECURITY = "ap_security"
+    const val KEY_AP_PMF = "ap_pmf"
     const val KEY_AP_CONTAINER_MODE = "ap_container_mode"
     const val KEY_AP_CONTAINER = "ap_container"
     const val KEY_HAS_SEEN_ROOT_CHECK = "has_seen_root_check"

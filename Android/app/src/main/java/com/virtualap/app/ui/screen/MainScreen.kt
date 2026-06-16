@@ -220,26 +220,86 @@ fun MainScreen(
                         )
                         Spacer(Modifier.height(8.dp))
 
-                        // Password
-                        OutlinedTextField(
-                            value = vm.config.password,
-                            onValueChange = { vm.config = vm.config.copy(password = it) },
-                            label = { Text(stringResource(R.string.password_label)) },
-                            modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            trailingIcon = {
-                                IconButton(onClick = { passwordVisible = !passwordVisible }) {
-                                    Icon(
-                                        if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                        contentDescription = if (passwordVisible) stringResource(R.string.hide_password_desc) else stringResource(R.string.show_password_desc)
+                        // Security dropdown (Open / WPA2 / WPA2-WPA3 / WPA3)
+                        var securityExpanded by remember { mutableStateOf(false) }
+                        val securityOptions = listOf(
+                            "Open" to "open",
+                            "WPA2-Personal" to "wpa2",
+                            "WPA2/WPA3-Personal" to "wpa2wpa3",
+                            "WPA3-Personal" to "wpa3"
+                        )
+                        val selectedSecurityLabel = securityOptions.find { it.second == vm.config.security }?.first ?: "WPA2-Personal"
+
+                        ExposedDropdownMenuBox(
+                            expanded = securityExpanded,
+                            onExpandedChange = { if (!status.running) securityExpanded = it }
+                        ) {
+                            OutlinedTextField(
+                                value = selectedSecurityLabel,
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(stringResource(R.string.security_label)) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = securityExpanded) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                                enabled = !status.running
+                            )
+                            ExposedDropdownMenu(
+                                expanded = securityExpanded,
+                                onDismissRequest = { securityExpanded = false }
+                            ) {
+                                securityOptions.forEach { (label, value) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            vm.selectSecurity(value)
+                                            securityExpanded = false
+                                        }
                                     )
                                 }
-                            },
-                            enabled = !status.running
-                        )
+                            }
+                        }
+                        // WPA3 (incl. the transition mode) can be rejected by older
+                        // client devices; warn so users know to fall back to WPA2.
+                        if (vm.config.security == "wpa2wpa3" || vm.config.security == "wpa3") {
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                stringResource(R.string.security_wpa3_hint),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         Spacer(Modifier.height(8.dp))
+
+                        // Password — open networks have none, so hide the field there.
+                        if (vm.passwordRequired()) {
+                            // WPA-PSK/SAE passphrase is 8-63 chars; flag an out-of-range
+                            // value once the user has started typing (blank stays neutral).
+                            val pwLen = vm.config.password.length
+                            val pwError = pwLen in 1..7 || pwLen > 63
+                            OutlinedTextField(
+                                value = vm.config.password,
+                                onValueChange = { vm.config = vm.config.copy(password = it) },
+                                label = { Text(stringResource(R.string.password_label)) },
+                                modifier = Modifier.fillMaxWidth(),
+                                singleLine = true,
+                                isError = pwError,
+                                supportingText = if (pwError) {
+                                    { Text(stringResource(R.string.password_length_error), color = MaterialTheme.colorScheme.error) }
+                                } else null,
+                                visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                trailingIcon = {
+                                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                                        Icon(
+                                            if (passwordVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                            contentDescription = if (passwordVisible) stringResource(R.string.hide_password_desc) else stringResource(R.string.show_password_desc)
+                                        )
+                                    }
+                                },
+                                enabled = !status.running
+                            )
+                            Spacer(Modifier.height(8.dp))
+                        }
 
                         // Band dropdown
                         var bandExpanded by remember { mutableStateOf(false) }
@@ -267,8 +327,8 @@ fun MainScreen(
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         onClick = {
-                                            val newWidth = if (value == "2" && vm.config.width == "80") "40" else vm.config.width
-                                            vm.config = vm.config.copy(band = value, channel = "", width = newWidth)
+                                            // Reset channel: valid channels differ per band.
+                                            vm.selectBand(value)
                                             bandExpanded = false
                                         }
                                     )
@@ -310,7 +370,7 @@ fun MainScreen(
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         onClick = {
-                                            vm.config = vm.config.copy(channel = value)
+                                            vm.selectChannel(value)
                                             channelExpanded = false
                                         }
                                     )
@@ -319,14 +379,15 @@ fun MainScreen(
                         }
                         Spacer(Modifier.height(8.dp))
 
-                        // Width dropdown
+                        // Width dropdown. All options are always selectable; the
+                        // backend downgrades an unsupported width (wrong band/chip/
+                        // channel) to the widest it can actually bring up.
                         var widthExpanded by remember { mutableStateOf(false) }
-                        val widthOptions = if (vm.config.band == "5") {
-                            listOf("20 MHz" to "20", "40 MHz" to "40", "80 MHz" to "80")
-                        } else {
-                            listOf("20 MHz" to "20", "40 MHz" to "40")
-                        }
-                        val selectedWidthLabel = widthOptions.find { it.second == vm.config.width }?.first ?: "20 MHz"
+                        val widthOptions = listOf(
+                            autoLabel to "auto", "20 MHz" to "20",
+                            "40 MHz" to "40", "80 MHz" to "80"
+                        )
+                        val selectedWidthLabel = widthOptions.find { it.second == vm.config.width }?.first ?: autoLabel
 
                         ExposedDropdownMenuBox(
                             expanded = widthExpanded,
@@ -349,7 +410,7 @@ fun MainScreen(
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         onClick = {
-                                            vm.config = vm.config.copy(width = value)
+                                            vm.selectWidth(value)
                                             widthExpanded = false
                                         }
                                     )
@@ -598,6 +659,21 @@ fun MainScreen(
                             onCheckedChange = { vm.config = vm.config.copy(hidden = it) },
                             enabled = !status.running
                         )
+
+                        // Protected Management Frames — only a real choice in WPA2.
+                        // WPA2/WPA3 and WPA3 set it automatically per the standard,
+                        // so the toggle is hidden for those modes.
+                        if (vm.config.security == "wpa2") {
+                            Spacer(Modifier.height(8.dp))
+                            SwitchItem(
+                                label = stringResource(R.string.pmf_label),
+                                subtitle = stringResource(R.string.pmf_desc),
+                                icon = Icons.Default.Security,
+                                checked = vm.config.pmf,
+                                onCheckedChange = { vm.setPmf(it) },
+                                enabled = !status.running
+                            )
+                        }
                     }
                 }
             }
@@ -610,7 +686,7 @@ fun MainScreen(
                     Button(
                         onClick = { if (status.running) vm.stop() else vm.start() },
                         modifier = Modifier.fillMaxWidth().height(52.dp),
-                        enabled = !isLoading && (status.running || (vm.config.ssid.isNotBlank() && vm.config.password.length >= 8 && (!vm.config.containerMode || vm.config.containerName.isNotBlank()))),
+                        enabled = !isLoading && (status.running || (vm.config.ssid.isNotBlank() && vm.passwordValid() && (!vm.config.containerMode || vm.config.containerName.isNotBlank()))),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = if (status.running)
                                 MaterialTheme.colorScheme.error

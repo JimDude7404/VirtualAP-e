@@ -15,6 +15,10 @@ RUN_DIR="${BASE_DIR}/run"
 CONF_FILE="${BASE_DIR}/ap.conf"
 STATE_FILE="${BASE_DIR}/run.state"
 LOG_FILE="${BASE_DIR}/logs/ap.log"
+# Per-daemon logs so a crash/failure leaves a trace instead of vanishing (both
+# daemonize and would otherwise drop their output into the void).
+HOSTAPD_LOG="${BASE_DIR}/logs/hostapd.log"
+DNSMASQ_LOG="${BASE_DIR}/logs/dnsmasq.log"
 
 # Static AP-stack binaries (replace the old Alpine chroot tools)
 HOSTAPD="${BIN_DIR}/hostapd"
@@ -47,9 +51,13 @@ SSID=""
 PASSWORD=""
 BAND="2"
 CHANNEL=""
-WIDTH="20"
+WIDTH="auto"
 DNS_SERVERS=""
 HIDDEN="0"
+# Security: open | wpa2 | wpa2wpa3 | wpa3. PMF (ieee80211w) only applies to wpa2
+# (0/1); wpa2wpa3 forces 1 and wpa3 forces 2 per the standard.
+SECURITY="wpa2"
+PMF="0"
 
 # --- Droidspaces container integration (managed mode) ---
 # When CONTAINER is set: ap0 becomes a bridged port on VAP_BRIDGE, a veth peer
@@ -112,8 +120,6 @@ error() { $ECHO "[ERROR] $1";  $ECHO "[$($DATE '+%Y-%m-%d %H:%M:%S')] [ERROR] $1
 
 load_conf() {
     [ -f "$CONF_FILE" ] && . "$CONF_FILE"
-    # Migration: default WIDTH if not in ap.conf
-    WIDTH="${WIDTH:-20}"
 }
 
 # Escape single quotes so a password with " or $ can't break out of the conf file.
@@ -131,6 +137,8 @@ WIDTH='$(sq "$WIDTH")'
 IP_GW='$(sq "$IP_GW")'
 DNS_SERVERS='$(sq "$DNS_SERVERS")'
 HIDDEN='$(sq "$HIDDEN")'
+SECURITY='$(sq "$SECURITY")'
+PMF='$(sq "$PMF")'
 CONTAINER='$(sq "$CONTAINER")'
 EOF
 }
@@ -226,6 +234,76 @@ reg_country() {
 is_dfs_channel() {
     # 5GHz DFS range: beaconing needs radar detection - phone chips refuse
     [ "$1" -ge 52 ] 2>/dev/null && [ "$1" -le 144 ] 2>/dev/null
+}
+
+# --- Channel-width helpers (5GHz VHT geometry + chip capabilities) ---
+
+# wiphy index of the STA radio (capabilities are per-wiphy). Empty if unknown.
+phy_idx() {
+    "$IW" dev "$PHY_IFACE" info 2>/dev/null \
+        | $SED -n 's/.*wiphy \([0-9]*\).*/\1/p' | $HEAD -n1
+}
+
+# Cache the radio's `iw phy <phyN> info` once - it's static and a bit slow.
+PHY_INFO_CACHE=""
+phy_info() {
+    if [ -z "$PHY_INFO_CACHE" ]; then
+        local idx; idx=$(phy_idx)
+        [ -n "$idx" ] && PHY_INFO_CACHE=$("$IW" phy "phy$idx" info 2>/dev/null)
+    fi
+    $PRINTF '%s' "$PHY_INFO_CACHE"
+}
+
+phy_supports_vht()  { phy_info | $GREP -q 'VHT Capabilities'; }
+phy_supports_ht40() { phy_info | $GREP -q 'HT20/HT40'; }
+
+# 80MHz block center channel index (vht_oper_centr_freq_seg0_idx) for a primary
+# 5GHz channel. Empty if the channel is not part of a valid 80MHz block.
+vht_seg0() {
+    local c="$1"
+    if   [ "$c" -ge 36  ] && [ "$c" -le 48  ]; then $ECHO 42
+    elif [ "$c" -ge 52  ] && [ "$c" -le 64  ]; then $ECHO 58
+    elif [ "$c" -ge 100 ] && [ "$c" -le 112 ]; then $ECHO 106
+    elif [ "$c" -ge 116 ] && [ "$c" -le 128 ]; then $ECHO 122
+    elif [ "$c" -ge 132 ] && [ "$c" -le 144 ]; then $ECHO 138
+    elif [ "$c" -ge 149 ] && [ "$c" -le 161 ]; then $ECHO 155
+    fi
+}
+
+# HT40 secondary-channel direction (+/-) for a primary channel inside its 80MHz
+# block: lower member of each 40MHz pair is '+', upper is '-'. seg0-6 is the
+# block's first channel; channels step by 4 (works for UNII-3's 149/153/157/161).
+ht40_dir() {
+    local c="$1" seg0="$2" start off
+    start=$((seg0 - 6)); off=$((c - start))
+    if [ $(( (off / 4) % 2 )) -eq 0 ]; then $ECHO '+'; else $ECHO '-'; fi
+}
+
+# Resolve the effective channel width into EFFECTIVE_WIDTH (20|40|80), honoring
+# the requested WIDTH but downgrading to what the band/channel/chip can do. Runs
+# after pick_channel (needs the final BAND/CHANNEL).
+EFFECTIVE_WIDTH="20"
+pick_width() {
+    if [ "$BAND" != "5" ]; then
+        # 2.4GHz: HT40 is unreliable/discouraged in practice - stay at 20MHz.
+        EFFECTIVE_WIDTH="20"; return
+    fi
+
+    # Widest the chip + channel can actually do. A non-empty vht_seg0 means the
+    # channel sits in a valid 40/80MHz block (excludes 20MHz-only channels like 165).
+    local max="20" inblock
+    inblock=$(vht_seg0 "$CHANNEL")
+    if phy_supports_ht40 && [ -n "$inblock" ]; then max="40"; fi
+    if phy_supports_vht  && [ -n "$inblock" ]; then max="80"; fi
+
+    case "$WIDTH" in
+        20) EFFECTIVE_WIDTH="20" ;;
+        40) [ "$max" = "20" ] && EFFECTIVE_WIDTH="20" || EFFECTIVE_WIDTH="40" ;;
+        80) EFFECTIVE_WIDTH="$max" ;;       # 80 if possible, else max (40/20)
+        *)  EFFECTIVE_WIDTH="$max" ;;       # auto = widest supported
+    esac
+    [ "$EFFECTIVE_WIDTH" != "$WIDTH" ] && [ "$WIDTH" != "auto" ] && \
+        warn "Requested ${WIDTH}MHz but using ${EFFECTIVE_WIDTH}MHz (channel/chip limit)."
 }
 
 pick_channel() {
@@ -429,7 +507,6 @@ upstream_table=$UPSTREAM_TABLE
 upstream_iface=$UPSTREAM_IFACE_RESOLVED
 band=$BAND
 channel=$CHANNEL
-width=$WIDTH
 ssid=$SSID
 gateway=$IP_GW
 dns_servers=$DNS_SERVERS
@@ -442,45 +519,78 @@ EOF
 }
 
 # Generate hostapd.conf. $1 = optional bridge name: when set, hostapd enslaves
-# ap0 to that bridge itself (managed mode) and we run no dnsmasq/L3.
+# ap0 to that bridge itself (managed mode) and we run no dnsmasq/L3. Channel
+# width comes from EFFECTIVE_WIDTH (set by pick_width): 20|40|80.
 write_hostapd_conf() {
-    local hb="$1" country hw_mode extra
+    local hb="$1" country hw_mode extra seg0 dir sec
     country=$(reg_country)
-
-    extra="ieee80211n=1"
     if [ "$BAND" = "5" ]; then
         hw_mode="a"
-        extra="$extra
+        # 802.11n + 802.11ac. The width params are what actually open up 40/80MHz;
+        # ieee80211ac alone leaves hostapd at 20MHz. vht_capab is left unset for
+        # max chip compatibility (width is independent of it).
+        extra="ieee80211n=1
 ieee80211ac=1"
+        # no_pri_sec_switch=1 skips hostapd's 20/40MHz OBSS coexistence scan
+        # (the HT_SCAN state). FullMAC chips (e.g. Broadcom/brcmfmac on the
+        # Galaxy S10) can't scan on an AP vif and return -95 (Not supported),
+        # which aborts hostapd whenever HT40/VHT is requested. The firmware
+        # self-manages the channel, so skipping the scan is safe. We set HT40+/-
+        # explicitly, so the pri/sec auto-switch this also disables is unwanted
+        # anyway. Only needed for HT40/VHT (20MHz has no ht_capab, no HT_SCAN).
+        # Requires the hostapd-vap fork's config-parser wiring (the upstream
+        # struct field exists but is otherwise unreachable from hostapd.conf).
+        if [ "$EFFECTIVE_WIDTH" = "80" ]; then
+            seg0=$(vht_seg0 "$CHANNEL"); dir=$(ht40_dir "$CHANNEL" "$seg0")
+            extra="$extra
+no_pri_sec_switch=1
+ht_capab=[HT40$dir]
+vht_oper_chwidth=1
+vht_oper_centr_freq_seg0_idx=$seg0"
+        elif [ "$EFFECTIVE_WIDTH" = "40" ]; then
+            seg0=$(vht_seg0 "$CHANNEL"); dir=$(ht40_dir "$CHANNEL" "$seg0")
+            extra="$extra
+no_pri_sec_switch=1
+ht_capab=[HT40$dir]
+vht_oper_chwidth=0"
+        fi
+        # width 20: no ht_capab / vht_oper_chwidth -> hostapd uses 20MHz.
     else
         hw_mode="g"
+        extra="ieee80211n=1"
     fi
 
-    if [ "$WIDTH" = "40" ] || [ "$WIDTH" = "80" ]; then
-        local ht_cap=""
-        if [ "$BAND" = "2" ]; then
-            if [ "$CHANNEL" -le 7 ]; then ht_cap="[HT40+]"; else ht_cap="[HT40-]"; fi
-        else
-            if [ "$(( (CHANNEL / 4) % 2 ))" -eq 1 ]; then ht_cap="[HT40+]"; else ht_cap="[HT40-]"; fi
-        fi
-        extra="$extra
-ht_capab=$ht_cap"
-
-        if [ "$BAND" = "5" ] && [ "$WIDTH" = "80" ]; then
-            extra="$extra
-vht_oper_chwidth=1"
-            local vht_center=""
-            if [ "$CHANNEL" -ge 36 ] && [ "$CHANNEL" -le 48 ]; then vht_center="42"
-            elif [ "$CHANNEL" -ge 52 ] && [ "$CHANNEL" -le 64 ]; then vht_center="58"
-            elif [ "$CHANNEL" -ge 100 ] && [ "$CHANNEL" -le 112 ]; then vht_center="106"
-            elif [ "$CHANNEL" -ge 116 ] && [ "$CHANNEL" -le 128 ]; then vht_center="122"
-            elif [ "$CHANNEL" -ge 132 ] && [ "$CHANNEL" -le 144 ]; then vht_center="138"
-            elif [ "$CHANNEL" -ge 149 ] && [ "$CHANNEL" -le 161 ]; then vht_center="155"
-            fi
-            [ -n "$vht_center" ] && extra="$extra
-vht_oper_centr_freq_seg0_idx=$vht_center"
-        fi
-    fi
+    # Security block. open = no encryption (no wpa lines). PMF (ieee80211w):
+    # wpa2 honors $PMF (0/1); wpa2wpa3 transition needs 1 (capable); wpa3 needs 2
+    # (required). SAE (wpa3 / the wpa3 half of transition) requires hostapd built
+    # with CONFIG_SAE - see scripts/build-in-container.sh.
+    case "$SECURITY" in
+        open)
+            sec=""
+            ;;
+        wpa3)
+            sec="wpa=2
+wpa_passphrase=$PASSWORD
+wpa_key_mgmt=SAE
+rsn_pairwise=CCMP
+ieee80211w=2"
+            ;;
+        wpa2wpa3)
+            sec="wpa=2
+wpa_passphrase=$PASSWORD
+wpa_key_mgmt=WPA-PSK SAE
+rsn_pairwise=CCMP
+ieee80211w=1"
+            ;;
+        *)  # wpa2 (default)
+            sec="wpa=2
+wpa_passphrase=$PASSWORD
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP"
+            [ "$PMF" = "1" ] && sec="$sec
+ieee80211w=1"
+            ;;
+    esac
 
     $CAT > "$RUN_DIR/hostapd.conf" <<EOF
 interface=$AP_IFACE
@@ -493,31 +603,45 @@ channel=$CHANNEL
 $extra
 country_code=US
 ieee80211d=1
-wpa=2
-wpa_passphrase=$PASSWORD
-wpa_key_mgmt=WPA-PSK
-rsn_pairwise=CCMP
+$sec
 ignore_broadcast_ssid=$HIDDEN
 EOF
 }
 
-start_hostapd() {
-    log "Starting hostapd..."
-    if ! "$HOSTAPD" -B -P "$RUN_DIR/hostapd.pid" "$RUN_DIR/hostapd.conf"; then
-        error "hostapd failed to start (check band/channel - try band 2)."
-        return 1
-    fi
+# Launch hostapd once against the current conf and confirm it stayed up. -t -f
+# captures timestamped hostapd output to its own log (it daemonizes with -B, so
+# the failure reason would otherwise be lost); stderr is appended too to catch
+# any pre-daemonize config errors. Log is truncated per start.
+hostapd_try() {
+    : > "$HOSTAPD_LOG" 2>/dev/null
+    "$HOSTAPD" -B -t -f "$HOSTAPD_LOG" -P "$RUN_DIR/hostapd.pid" "$RUN_DIR/hostapd.conf" 2>>"$HOSTAPD_LOG" || return 1
     $SLEEP 2
-    [ -f "$RUN_DIR/hostapd.pid" ] && $KILL -0 "$($CAT "$RUN_DIR/hostapd.pid")" 2>/dev/null || {
-        error "hostapd is not running after start"; return 1; }
-    log "hostapd running (PID $($CAT "$RUN_DIR/hostapd.pid" 2>/dev/null))"
-    return 0
+    [ -f "$RUN_DIR/hostapd.pid" ] && $KILL -0 "$($CAT "$RUN_DIR/hostapd.pid")" 2>/dev/null
+}
+
+# Generate the conf at the picked width and launch hostapd once. pick_width has
+# already resolved EFFECTIVE_WIDTH to a width the chip + channel support (warning
+# on any downgrade), so there's no width fallback to attempt here.
+# $1 = optional bridge name (managed mode), passed through to write_hostapd_conf.
+start_hostapd() {
+    local hb="$1"
+    write_hostapd_conf "$hb"
+    log "Starting hostapd (${BAND}GHz ch $CHANNEL, ${EFFECTIVE_WIDTH}MHz)..."
+    if hostapd_try; then
+        log "hostapd running (PID $($CAT "$RUN_DIR/hostapd.pid" 2>/dev/null), ${EFFECTIVE_WIDTH}MHz)"
+        return 0
+    fi
+    # Clean only hostapd's pidfile (the shared dnsmasq.conf must survive).
+    [ -f "$RUN_DIR/hostapd.pid" ] && $KILL "$($CAT "$RUN_DIR/hostapd.pid")" 2>/dev/null
+    $RM -f "$RUN_DIR/hostapd.pid"
+    error "hostapd failed to start (check band/channel - try band 2)."
+    return 1
 }
 
 start_services() {
     log "Generating service configs (band ${BAND}GHz, channel $CHANNEL)..."
 
-    write_hostapd_conf ""
+    # hostapd.conf is generated inside start_hostapd.
 
     local dns_config=""
     if [ -n "$DNS_SERVERS" ]; then
@@ -551,11 +675,14 @@ $dns_config
 no-hosts
 pid-file=$RUN_DIR/dnsmasq.pid
 user=root
+log-facility=$DNSMASQ_LOG
+log-dhcp
 EOF
 
-    start_hostapd || return 1
+    start_hostapd "" || return 1
 
     log "Starting dnsmasq..."
+    : > "$DNSMASQ_LOG" 2>/dev/null
     if ! "$DNSMASQ" -C "$RUN_DIR/dnsmasq.conf"; then
         error "dnsmasq failed to start"
         return 1
@@ -676,7 +803,6 @@ container=$CONTAINER
 bridge=$VAP_BRIDGE
 band=$BAND
 channel=$CHANNEL
-width=$WIDTH
 ssid=$SSID
 gateway=$VAP_LAN_GW
 started=$($DATE '+%Y-%m-%d %H:%M:%S')
@@ -688,8 +814,9 @@ EOF
 
 start_services_bridged() {
     log "Starting hostapd (managed/bridged mode)..."
-    write_hostapd_conf ""          # no bridge= - we enslave ap0 ourselves below
-    start_hostapd || return 1
+    # No bridge= - we enslave ap0 ourselves below. hostapd.conf is generated
+    # inside start_hostapd.
+    start_hostapd "" || return 1
 
     # Enslave ap0 only after hostapd is up, retrying past the transient EPERM.
     local i=0
@@ -725,8 +852,13 @@ teardown_bridged() {
 
 cmd_start() {
     [ -z "$SSID" ] && { error "SSID not set (use -s or save a config first)"; exit 1; }
-    if [ "$($PRINTF %s "$PASSWORD" | $WC -c)" -lt 8 ]; then
-        error "Password must be at least 8 characters."; exit 1
+    # Open networks carry no passphrase; WPA modes use a WPA-PSK/SAE passphrase,
+    # which the standard (and hostapd) bound to 8-63 characters.
+    if [ "$SECURITY" != "open" ]; then
+        plen=$($PRINTF %s "$PASSWORD" | $WC -c)
+        if [ "$plen" -lt 8 ] || [ "$plen" -gt 63 ]; then
+            error "Password must be 8-63 characters."; exit 1
+        fi
     fi
 
     # Validate channel compatibility with selected band
@@ -773,26 +905,28 @@ cmd_start() {
             full_stop_bridged; exit 1
         fi
         pick_channel
+        pick_width
         trap 'full_stop_bridged; exit 1' INT TERM
 
         if ! config_network_bridged; then full_stop_bridged; exit 1; fi
         if ! start_services_bridged; then full_stop_bridged; exit 1; fi
 
         log "VirtualAP is ACTIVE (managed by container '$CONTAINER')!"
-        log "  SSID     : $SSID (${BAND}GHz, channel $CHANNEL)"
+        log "  SSID     : $SSID (${BAND}GHz, channel $CHANNEL, ${EFFECTIVE_WIDTH}MHz)"
         log "  Upstream : container '$CONTAINER' via $VAP_BRIDGE -> $VAP_PORT"
         log "  LAN      : served by the container ($VAP_LAN_GW)"
     else
         # --- Routed mode: classic VirtualAP L3 ---
         resolve_upstream || exit 1
         pick_channel
+        pick_width
         trap 'full_stop; exit 1' INT TERM
 
         if ! config_network; then full_stop; exit 1; fi
         if ! start_services; then full_stop; exit 1; fi
 
         log "VirtualAP is ACTIVE!"
-        log "  SSID    : $SSID (${BAND}GHz, channel $CHANNEL)"
+        log "  SSID    : $SSID (${BAND}GHz, channel $CHANNEL, ${EFFECTIVE_WIDTH}MHz)"
         log "  Gateway : $IP_GW (static - never changes)"
         log "  Upstream: ${UPSTREAM_IFACE_RESOLVED:-$UPSTREAM} (table $UPSTREAM_TABLE)"
     fi
@@ -835,9 +969,22 @@ cmd_status() {
     $ECHO "hostapd=$hostapd_state"
     $ECHO "dnsmasq=$dnsmasq_state"
     $ECHO "clients=$clients"
+    # Actual channel width, read from the live conf so it reflects any fallback.
+    if [ "$running" = "1" ] && [ -f "$RUN_DIR/hostapd.conf" ]; then
+        if   $GREP -q '^vht_oper_chwidth=1' "$RUN_DIR/hostapd.conf"; then $ECHO "width=80"
+        elif $GREP -q '^ht_capab=\[HT40'    "$RUN_DIR/hostapd.conf"; then $ECHO "width=40"
+        else $ECHO "width=20"; fi
+    fi
+    # Active security mode, derived from the live conf's key-mgmt line.
+    if [ "$running" = "1" ] && [ -f "$RUN_DIR/hostapd.conf" ]; then
+        if   ! $GREP -q '^wpa=' "$RUN_DIR/hostapd.conf"; then $ECHO "security=open"
+        elif $GREP -q '^wpa_key_mgmt=WPA-PSK SAE' "$RUN_DIR/hostapd.conf"; then $ECHO "security=wpa2wpa3"
+        elif $GREP -q '^wpa_key_mgmt=SAE'         "$RUN_DIR/hostapd.conf"; then $ECHO "security=wpa3"
+        else $ECHO "security=wpa2"; fi
+    fi
     # gateway/ssid/etc. come from the state file (routed: IP_GW; bridged: VAP_LAN_GW)
     if [ -f "$STATE_FILE" ]; then
-        $GREP -E '^(ssid|band|channel|width|upstream|upstream_table|upstream_iface|gateway|dns_servers|container|started)=' "$STATE_FILE"
+        $GREP -E '^(ssid|band|channel|upstream|upstream_table|upstream_iface|gateway|dns_servers|container|started)=' "$STATE_FILE"
     else
         $ECHO "gateway=$IP_GW"
     fi
@@ -870,6 +1017,17 @@ cmd_containers() {
         | $SED -n 's/^CONT_\(.*\)=[0-9][0-9]*$/\1/p'
 }
 
+cmd_caps() {
+    # 5GHz channel-width capabilities of the Wi-Fi chip, for the app to grey out
+    # unsupported width options. 20MHz is always available (not reported). 2.4GHz
+    # is fixed to 20MHz by policy regardless of these.
+    local ht40=0 vht=0
+    phy_supports_ht40 && ht40=1
+    phy_supports_vht  && vht=1
+    $ECHO "ht40=$ht40"
+    $ECHO "vht=$vht"
+}
+
 # --- Main ---
 
 if [ "$($ID -u)" -ne 0 ]; then
@@ -885,11 +1043,14 @@ print_usage() {
     $ECHO "  -o <iface>     Upstream interface, or 'auto' (default: auto)"
     $ECHO "  -b <band>      2 = 2.4GHz (default), 5 = 5GHz"
     $ECHO "  -c <channel>   Channel (auto-picked / STA-followed when omitted)"
-    $ECHO "  -L <width>     Width: 20 (default), 40, 80"
+    $ECHO "  -W <width>     Channel width: auto (default), 20, 40, 80 (5GHz only)"
     $ECHO "  -g <gateway>   Custom gateway IP (default: 192.168.42.1)"
     $ECHO "  -d <dns>       Comma-separated list of upstream DNS servers"
     $ECHO "  -w <iface>     Physical WiFi interface (default: wlan0)"
     $ECHO "  -H <0|1>       Hide SSID (0 = visible [default], 1 = hidden)"
+    $ECHO "  -A <mode>      Security: open, wpa2 (default), wpa2wpa3, wpa3"
+    $ECHO "  -M <0|1>       Protected Management Frames for wpa2 (0=off [default],"
+    $ECHO "                 1=on); forced on for wpa2wpa3, required for wpa3"
     $ECHO "  -K <container> Managed mode: hand the AP's LAN to a Droidspaces"
     $ECHO "                 container (it owns DHCP/DNS/NAT). Disables -o/-g/-d."
     $ECHO ""
@@ -902,18 +1063,20 @@ COMMAND="$1"
 # Saved config provides defaults; CLI flags override
 load_conf
 
-while getopts "s:p:o:b:c:L:w:g:d:H:K:h" opt 2>/dev/null; do
+while getopts "s:p:o:b:c:W:w:g:d:H:A:M:K:h" opt 2>/dev/null; do
     case $opt in
         s) SSID="$OPTARG" ;;
         p) PASSWORD="$OPTARG" ;;
         o) UPSTREAM="$OPTARG" ;;
         b) BAND="$OPTARG" ;;
         c) CHANNEL="$OPTARG" ;;
-        L) WIDTH="$OPTARG" ;;
+        W) WIDTH="$OPTARG" ;;
         w) PHY_IFACE="$OPTARG" ;;
         g) IP_GW="$OPTARG" ;;
         d) DNS_SERVERS="$OPTARG" ;;
         H) HIDDEN="$OPTARG" ;;
+        A) SECURITY="$OPTARG" ;;
+        M) PMF="$OPTARG" ;;
         K) CONTAINER="$OPTARG" ;;
         h) print_usage; exit 0 ;;
         *) print_usage; exit 1 ;;
@@ -932,6 +1095,7 @@ case "$COMMAND" in
     leases)     cmd_leases ;;
     interfaces) cmd_interfaces ;;
     containers) cmd_containers ;;
+    caps)       cmd_caps ;;
     -h|--help|help|"") print_usage; exit 0 ;;
     *) error "Unknown command: $COMMAND"; print_usage; exit 1 ;;
 esac
